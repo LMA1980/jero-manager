@@ -23,6 +23,7 @@ pub mod scheduler;
 pub mod session;
 pub mod store;
 pub mod supervisor;
+pub mod telemetry;
 
 pub use flight::{
     BOUNDED_MEMLOCK_CEILING_BYTES, FlightError, FlightReceiver, FlightStream, FlightSummary,
@@ -125,4 +126,14 @@ pub use session::{
 pub use supervisor::{
     DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_PASS_TIMEOUT, ManagedWorker, ResumptionSnapshot,
     WorkerPlacement, WorkerSupervisor, find_worker_binary,
+};
+pub use telemetry::{
+    A100_VLEN_BITS, BOUNDED_MEMLOCK_CEILING_KB, CollectorEndpoint, DEFAULT_COLLECTOR_TIMEOUT,
+    DEFAULT_MAX_BUFFERED_BATCHES, DEFAULT_TELEMETRY_ARCH, DEFAULT_TELEMETRY_NODE_ID,
+    FramedMuobBatch, InferenceSpanStage, InferenceTelemetryRecord, K3ClusterTarget,
+    MSG_TYPE_ARROW_OTEL_METRICS, MSG_TYPE_ARROW_OTEL_SPANS, MSG_TYPE_WAL_ACK,
+    MuObserveTelemetryStreamer, OtelMetricEntry, OtelSpanEntry, SERVICE_NAME_K3_MANAGER,
+    TelemetryIpcError, TraceContext, WalBatchAck, X100_VLEN_BITS, decode_metric_batch,
+    decode_span_batch, encode_metric_batch, encode_span_batch, estimate_bounded_kv_memlock_kb,
+    resolve_or_create_trace_context,
 };

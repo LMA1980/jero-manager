@@ -29,6 +29,10 @@ use crate::prompt::{
 use crate::queue::AdmissionQueueManager;
 use crate::router::DecisionRouter;
 use crate::scheduler::MultiModelScheduler;
+use crate::telemetry::{
+    InferenceTelemetryRecord, K3ClusterTarget, MuObserveTelemetryStreamer,
+    estimate_bounded_kv_memlock_kb, resolve_or_create_trace_context,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use k3_core::affinity::ResolvedControlCapacity;
@@ -430,6 +434,7 @@ pub struct ControlPlaneRuntime {
     router: Arc<DecisionRouter>,
     queue_mgr: Arc<AdmissionQueueManager>,
     persistence: Arc<dyn PersistenceStore>,
+    telemetry: Arc<MuObserveTelemetryStreamer>,
 }
 
 impl ControlPlaneRuntime {
@@ -524,6 +529,7 @@ impl ControlPlaneRuntime {
             SqlitePersistenceStore::open_in_memory()
                 .map_err(|e| ManagerError::WorkerSpawn(format!("sqlite init error: {e}")))?,
         );
+        let telemetry = Arc::new(MuObserveTelemetryStreamer::default());
 
         Ok(Self {
             scheduler: ControlPlaneScheduler::new(capacity),
@@ -541,6 +547,7 @@ impl ControlPlaneRuntime {
             router,
             queue_mgr,
             persistence,
+            telemetry,
         })
     }
 
@@ -593,6 +600,66 @@ impl ControlPlaneRuntime {
     /// Replaces the active persistence store (e.g. for on-disk persistence).
     pub fn set_persistence(&mut self, store: Arc<dyn PersistenceStore>) {
         self.persistence = store;
+    }
+
+    /// Returns a reference to the active [`MuObserveTelemetryStreamer`].
+    #[must_use]
+    pub fn telemetry(&self) -> &Arc<MuObserveTelemetryStreamer> {
+        &self.telemetry
+    }
+
+    /// Replaces the active [`MuObserveTelemetryStreamer`].
+    pub fn set_telemetry(&mut self, telemetry: Arc<MuObserveTelemetryStreamer>) {
+        self.telemetry = telemetry;
+    }
+
+    /// Sets a custom [`MuObserveTelemetryStreamer`] using builder syntax.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: Arc<MuObserveTelemetryStreamer>) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    /// Emits W3C-traced [`muobserve_ipc::OtelSpanEntry`] and hardware-tagged [`muobserve_ipc::OtelMetricEntry`]
+    /// batches for an inference request and streams them to `MuObserve-collector` with non-blocking fallback.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn emit_inference_telemetry_for_request(
+        &self,
+        endpoint: &str,
+        request_id: &str,
+        model_entry: &ModelEntry,
+        traceparent_header: Option<&str>,
+        prompt_tokens: u32,
+        decode_tokens: u32,
+        queue_duration_ns: u64,
+        kv_alloc_duration_ns: u64,
+        prefill_duration_ns: u64,
+        decode_duration_ns: u64,
+    ) {
+        let trace_ctx = resolve_or_create_trace_context(traceparent_header);
+        let cluster = K3ClusterTarget::from_placement(&model_entry.cluster, model_entry.a100_cores);
+        let cached_blocks = self.prefix_index.stats().total_cached_blocks;
+        let kv_memlock_kb = estimate_bounded_kv_memlock_kb(model_entry.n_ctx, cached_blocks);
+
+        let record = InferenceTelemetryRecord::new(
+            endpoint,
+            request_id,
+            &model_entry.id,
+            trace_ctx,
+            cluster,
+            prompt_tokens,
+            decode_tokens,
+            queue_duration_ns,
+            kv_alloc_duration_ns,
+            prefill_duration_ns,
+            decode_duration_ns,
+            kv_memlock_kb,
+        );
+
+        if let Ok((span_batch, metric_batch)) = self.telemetry.emit_inference_telemetry(&record) {
+            let batches = [span_batch, metric_batch];
+            let _ = self.telemetry.try_stream_to_collector(&batches).await;
+        }
     }
 
     /// Returns the number of active control worker threads.

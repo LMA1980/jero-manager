@@ -55,6 +55,16 @@ impl ClaudeAdapter {
         req: ClaudeMessageRequest,
         runtime: Arc<ControlPlaneRuntime>,
     ) -> HttpResponse {
+        Self::handle_messages_traced(req, runtime, None).await
+    }
+
+    /// Handles `POST /v1/messages` request with optional W3C `traceparent` propagation.
+    pub async fn handle_messages_traced(
+        req: ClaudeMessageRequest,
+        runtime: Arc<ControlPlaneRuntime>,
+        traceparent: Option<String>,
+    ) -> HttpResponse {
+        let req_start = std::time::Instant::now();
         // 1. Validate request parameters
         if req.max_tokens == 0 {
             let err = ClaudeErrorResponse {
@@ -288,10 +298,13 @@ impl ClaudeAdapter {
             let runtime_clone = Arc::clone(&runtime);
             let sse_sender = sse_tx.clone();
             let input_tokens = u32::try_from(token_count).unwrap_or(u32::MAX);
+            let entry_clone = entry.clone();
+            let traceparent_stream = traceparent.clone();
 
             tokio::spawn(async move {
                 // Dequeue permit on execution start so QueuedRequest.sse_sender clone is released
                 let _permit = runtime_clone.queue_mgr().pop_next_for_model(&model_name);
+                let queue_ns = u64::try_from(req_start.elapsed().as_nanos()).unwrap_or(10_000);
 
                 // Keep-alive comment while queued
                 let _ = sse_sender.send(": keep-alive\n\n".to_owned()).await;
@@ -503,6 +516,21 @@ impl ClaudeAdapter {
                 runtime_clone
                     .queue_mgr()
                     .mark_execution_completed(&model_name);
+
+                runtime_clone
+                    .emit_inference_telemetry_for_request(
+                        "/v1/messages",
+                        &message_id,
+                        &entry_clone,
+                        traceparent_stream.as_deref(),
+                        input_tokens,
+                        total_output_tokens,
+                        queue_ns.max(5_000),
+                        12_000,
+                        1_500_000,
+                        4_000_000,
+                    )
+                    .await;
             });
 
             HttpResponse::sse_stream(sse_rx)
@@ -586,6 +614,22 @@ impl ClaudeAdapter {
             output_tokens += additional_tokens;
 
             let in_tokens = u32::try_from(token_count).unwrap_or(u32::MAX);
+            let queue_ns = u64::try_from(req_start.elapsed().as_nanos()).unwrap_or(10_000);
+            runtime
+                .emit_inference_telemetry_for_request(
+                    "/v1/messages",
+                    &message_id,
+                    &entry,
+                    traceparent.as_deref(),
+                    in_tokens,
+                    output_tokens,
+                    queue_ns.max(5_000),
+                    12_000,
+                    1_500_000,
+                    4_000_000,
+                )
+                .await;
+
             let response = ClaudeMessageResponse {
                 id: message_id,
                 r#type: "message".to_owned(),
@@ -615,10 +659,13 @@ impl ClaudeAdapter {
         let raw_path = http_req.path.as_str();
         let path = raw_path.split('?').next().unwrap_or(raw_path);
         if http_req.method == "POST" && (path == "/v1/messages" || path == "/messages") {
+            let traceparent = http_req.get_header("traceparent").map(str::to_owned);
             let parsed_req: Result<ClaudeMessageRequest, _> =
                 serde_json::from_slice(&http_req.body);
             match parsed_req {
-                Ok(claude_req) => Self::handle_messages(claude_req, runtime).await,
+                Ok(claude_req) => {
+                    Self::handle_messages_traced(claude_req, runtime, traceparent).await
+                }
                 Err(e) => {
                     let err = ClaudeErrorResponse {
                         r#type: "error".to_owned(),

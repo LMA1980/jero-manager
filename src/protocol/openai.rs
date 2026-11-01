@@ -90,6 +90,16 @@ impl OpenAiAdapter {
         req: OpenAiChatRequest,
         runtime: Arc<ControlPlaneRuntime>,
     ) -> HttpResponse {
+        Self::handle_chat_completions_traced(req, runtime, None).await
+    }
+
+    /// Handles `POST /v1/chat/completions` request with optional W3C `traceparent` propagation.
+    pub async fn handle_chat_completions_traced(
+        req: OpenAiChatRequest,
+        runtime: Arc<ControlPlaneRuntime>,
+        traceparent: Option<String>,
+    ) -> HttpResponse {
+        let req_start = std::time::Instant::now();
         // 1. Model resolution
         let model_entry = runtime.get_model_entry(&req.model);
         if model_entry.is_none() {
@@ -245,10 +255,14 @@ impl OpenAiAdapter {
             let model_name = req.model.clone();
             let runtime_clone = Arc::clone(&runtime);
             let sse_sender = sse_tx.clone();
+            let entry_clone = entry.clone();
+            let p_tokens_stream = u32::try_from(token_count).unwrap_or(u32::MAX);
+            let traceparent_stream = traceparent.clone();
 
             tokio::spawn(async move {
                 // Dequeue permit on execution start so QueuedRequest.sse_sender clone is released
                 let _permit = runtime_clone.queue_mgr().pop_next_for_model(&model_name);
+                let queue_ns = u64::try_from(req_start.elapsed().as_nanos()).unwrap_or(10_000);
 
                 // If client was queued, emit keep-alive and queue position comments
                 let _ = sse_sender.send(": keep-alive\n\n".to_owned()).await;
@@ -281,7 +295,7 @@ impl OpenAiAdapter {
                     let _ = sse_sender.send(format!("data: {json}\n\n")).await;
                 }
 
-                if let Some(tool_call) = tool_call_trigger {
+                let stream_decode_tokens = if let Some(tool_call) = tool_call_trigger {
                     // Transparent tool call delta pass-through
                     let tool_chunk = OpenAiChunkResponse {
                         id: request_id.clone(),
@@ -325,6 +339,7 @@ impl OpenAiAdapter {
                     if let Ok(json) = serde_json::to_string(&chunk_final) {
                         let _ = sse_sender.send(format!("data: {json}\n\n")).await;
                     }
+                    16_u32
                 } else {
                     // Regular text content delta
                     let content_text = "Hello! How can I assist you today?";
@@ -362,7 +377,8 @@ impl OpenAiAdapter {
                     if let Ok(json) = serde_json::to_string(&chunk_final) {
                         let _ = sse_sender.send(format!("data: {json}\n\n")).await;
                     }
-                }
+                    8_u32
+                };
 
                 // Standard OpenAI stream termination
                 let _ = sse_sender.send("data: [DONE]\n\n".to_owned()).await;
@@ -371,6 +387,21 @@ impl OpenAiAdapter {
                 runtime_clone
                     .queue_mgr()
                     .mark_execution_completed(&model_name);
+
+                runtime_clone
+                    .emit_inference_telemetry_for_request(
+                        "/v1/chat/completions",
+                        &request_id,
+                        &entry_clone,
+                        traceparent_stream.as_deref(),
+                        p_tokens_stream,
+                        stream_decode_tokens,
+                        queue_ns.max(5_000),
+                        12_000,
+                        1_500_000,
+                        4_000_000,
+                    )
+                    .await;
             });
 
             HttpResponse::sse_stream(sse_rx)
@@ -441,6 +472,22 @@ impl OpenAiAdapter {
             };
 
             let p_tokens = u32::try_from(token_count).unwrap_or(u32::MAX);
+            let queue_ns = u64::try_from(req_start.elapsed().as_nanos()).unwrap_or(10_000);
+            runtime
+                .emit_inference_telemetry_for_request(
+                    "/v1/chat/completions",
+                    &request_id,
+                    &entry,
+                    traceparent.as_deref(),
+                    p_tokens,
+                    completion_tokens,
+                    queue_ns.max(5_000),
+                    12_000,
+                    1_500_000,
+                    4_000_000,
+                )
+                .await;
+
             let response = OpenAiChatResponse {
                 id: request_id,
                 object: "chat.completion".to_owned(),
@@ -473,9 +520,12 @@ impl OpenAiAdapter {
         } else if http_req.method == "POST"
             && (path == "/v1/chat/completions" || path == "/chat/completions")
         {
+            let traceparent = http_req.get_header("traceparent").map(str::to_owned);
             let parsed_req: Result<OpenAiChatRequest, _> = serde_json::from_slice(&http_req.body);
             match parsed_req {
-                Ok(chat_req) => Self::handle_chat_completions(chat_req, runtime).await,
+                Ok(chat_req) => {
+                    Self::handle_chat_completions_traced(chat_req, runtime, traceparent).await
+                }
                 Err(e) => {
                     let err = OpenAiErrorResponse {
                         error: OpenAiErrorDetails {
