@@ -28,3 +28,7 @@ Control plane for the SpacemiT K3 AI platform.
 For master architecture and detailed component specifications, see the parent [model-runner](https://github.com/LMA1980/model-runner) repository:
 - Master Plan: [PLAN.md](https://github.com/LMA1980/model-runner/blob/main/PLAN.md)
 - Specs: [specs/](https://github.com/LMA1980/model-runner/tree/main/specs)
+
+## License
+
+Licensed under the GNU Affero General Public License v3.0 (`AGPL-3.0-only`). See [LICENSE](LICENSE) for details.
