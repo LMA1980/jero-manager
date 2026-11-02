@@ -130,6 +130,28 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
+    // 6. Phi-3 base recipe (ADR-023)
+    let phi3_template = ChatTemplate::new(Some(
+        "<|user|>\n{{prompt}}<|end|>\n<|assistant|>\n".to_owned(),
+    ));
+    let phi3_stop = SpecialTokens {
+        stop_tokens: vec![32000, 32007], // <|endoftext|>, <|end|>
+        eot_token_id: Some(32007),
+        ..Default::default()
+    };
+
+    map.insert(
+        "phi3@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "phi3",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q4_K_M", "Q8_0", "Q6_K", "F32", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(phi3_template),
+            special_tokens: Some(phi3_stop),
+        },
+    );
+
     RwLock::new(map)
 });
 
@@ -473,5 +495,20 @@ mod tests {
         let suitability_admitted = CapabilityFilter::evaluate_candidate(&admitted);
         assert!(suitability_admitted.executable);
         assert!(suitability_admitted.reason.is_none());
+    }
+
+    #[test]
+    fn test_phi3_chat_template_alignment() {
+        let env = CapabilityFilter::align_prompt_environment("phi3", "1.0.0")
+            .expect("phi3 alignment succeeds");
+        assert_eq!(env.architecture_id, "phi3");
+
+        let formatted = env.chat_template.format_prompt("Tell me about Phi-3");
+        assert_eq!(
+            formatted,
+            "<|user|>\nTell me about Phi-3<|end|>\n<|assistant|>\n"
+        );
+        assert!(env.is_stop_token(32000));
+        assert!(env.is_stop_token(32007));
     }
 }
