@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::K3Error;
+use k3_core::{K3Error, QuantType, TensorView};
+use kernels_rvv::ime::{TILE_K, pack_tiles};
 use serde::{Deserialize, Serialize};
 
 use super::cas::ContentAddressedStore;
@@ -449,5 +450,224 @@ impl DerivedBlobManager {
                 advisory_message: advisory,
             })
         }
+    }
+}
+
+/// Pre-splits fused Phi-3/Phi-4 weights (e.g. `attn_qkv.weight` into Q, K, V and `ffn_up.weight`
+/// into Gate, Up) using zero-copy row slicing and repacks each partition into Cluster 1 A100
+/// `8x16` `i8` IME tiles.
+///
+/// # Errors
+/// Returns [`K3Error::TensorBoundsError`] if:
+/// - `src` has fewer than 2 dimensions,
+/// - the sum of `partition_rows` does not equal `src.shape()[1]`,
+/// - `src.shape()[0]` is not a multiple of `TILE_K` (16),
+/// - or if slice row bounds or byte ranges fail validation.
+pub fn repack_phi3_fused_tensor_ime_8x16(
+    src: &TensorView<'_>,
+    partition_rows: &[usize],
+) -> Result<Vec<Vec<i8>>, K3Error> {
+    let shape = src.shape();
+    if shape.len() < 2 {
+        return Err(K3Error::TensorBoundsError {
+            tensor_name: src.name().to_owned(),
+            offset: src.offset(),
+            byte_len: src.byte_len(),
+            buffer_len: src.byte_len(),
+            reason: format!(
+                "repack_phi3_fused_tensor_ime_8x16 requires at least 2 dimensions, found shape with {} dimension(s)",
+                shape.len()
+            ),
+        });
+    }
+
+    let total_rows = shape[1];
+    let partition_sum: usize = partition_rows.iter().copied().sum();
+    if partition_sum != total_rows {
+        return Err(K3Error::TensorBoundsError {
+            tensor_name: src.name().to_owned(),
+            offset: src.offset(),
+            byte_len: src.byte_len(),
+            buffer_len: src.byte_len(),
+            reason: format!(
+                "partition rows sum ({partition_sum}) does not match tensor row count ({total_rows})"
+            ),
+        });
+    }
+
+    let k = shape[0];
+    if k % TILE_K != 0 {
+        return Err(K3Error::TensorBoundsError {
+            tensor_name: src.name().to_owned(),
+            offset: src.offset(),
+            byte_len: src.byte_len(),
+            buffer_len: src.byte_len(),
+            reason: format!("tensor column dimension {k} must be a multiple of TILE_K ({TILE_K})"),
+        });
+    }
+
+    let mut results = Vec::with_capacity(partition_rows.len());
+    let mut current_row = 0usize;
+
+    for &p_rows in partition_rows {
+        let sub_view = src.slice_rows(current_row, p_rows)?;
+        current_row += p_rows;
+
+        let i8_vec: Vec<i8> = if sub_view.quant() == QuantType::Q8_0 {
+            let mut v = Vec::with_capacity(p_rows * k);
+            for row in 0..p_rows {
+                let row_blocks = k / 32;
+                let row_start_byte = row * row_blocks * 34;
+                for b in 0..row_blocks {
+                    let block_start = row_start_byte + b * 34;
+                    let qs = &sub_view.as_bytes()[block_start + 2..block_start + 34];
+                    // SAFETY: u8 and i8 have identical 1-byte size, alignment, and all bit patterns are valid.
+                    // Length is guaranteed to be exactly 32 bytes from the sub-slice above.
+                    let qs_i8: &[i8] =
+                        unsafe { core::slice::from_raw_parts(qs.as_ptr().cast::<i8>(), 32) };
+                    v.extend_from_slice(qs_i8);
+                }
+            }
+            v
+        } else {
+            let raw = sub_view.as_bytes();
+            let expected = p_rows * k;
+            if raw.len() == expected {
+                // SAFETY: u8 and i8 have identical 1-byte size, alignment, and valid bit patterns;
+                // slice length is verified to match raw.len().
+                let i8_slice: &[i8] =
+                    unsafe { core::slice::from_raw_parts(raw.as_ptr().cast::<i8>(), raw.len()) };
+                i8_slice.to_vec()
+            } else {
+                return Err(K3Error::TensorBoundsError {
+                    tensor_name: sub_view.name().to_owned(),
+                    offset: sub_view.offset(),
+                    byte_len: sub_view.byte_len(),
+                    buffer_len: sub_view.byte_len(),
+                    reason: format!(
+                        "unsupported quant {:?} or unexpected byte length {} for {} elements",
+                        sub_view.quant(),
+                        raw.len(),
+                        expected
+                    ),
+                });
+            }
+        };
+
+        let packed = pack_tiles(&i8_vec, p_rows, k);
+        results.push(packed);
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "row index in test fits in u8"
+    )]
+    fn test_repack_phi3_fused_qkv_pre_split() {
+        // Fused QKV tensor with shape [32 cols, 8 rows]:
+        // Q: 4 rows, K: 2 rows, V: 2 rows (sum = 8 rows)
+        let cols = 32;
+        let total_rows = 8;
+        let shape = [cols, total_rows];
+        let mut q8_raw = vec![0_u8; 34 * total_rows];
+        for r in 0..total_rows {
+            let start = r * 34;
+            // f16 scale = 1.0 (0x3C00)
+            q8_raw[start..start + 2].copy_from_slice(&[0x00, 0x3C]);
+            // 32 i8 values
+            q8_raw[start + 2..start + 34].fill((r as u8) + 1);
+        }
+
+        let q8_view =
+            TensorView::from_bytes("blk.0.attn_qkv.weight", QuantType::Q8_0, &shape, 0, &q8_raw)
+                .expect("valid Q8_0 view");
+
+        let partitions = [4, 2, 2];
+        let repacked = repack_phi3_fused_tensor_ime_8x16(&q8_view, &partitions)
+            .expect("repack fused qkv succeeds");
+
+        assert_eq!(repacked.len(), 3);
+        // Q partition: 4 rows padded to 8 rows * (32 / 16 = 2 chunks) * 128 bytes = 256 bytes
+        assert_eq!(repacked[0].len(), 256);
+        // K partition: 2 rows padded to 8 rows * 2 chunks * 128 bytes = 256 bytes
+        assert_eq!(repacked[1].len(), 256);
+        // V partition: 2 rows padded to 8 rows * 2 chunks * 128 bytes = 256 bytes
+        assert_eq!(repacked[2].len(), 256);
+
+        // Verify first tile of Q partition contains marker 1 in first 16 bytes
+        assert_eq!(repacked[0][0], 1);
+        // Verify K partition contains marker 5 (row 4)
+        assert_eq!(repacked[1][0], 5);
+        // Verify V partition contains marker 7 (row 6)
+        assert_eq!(repacked[2][0], 7);
+    }
+
+    #[test]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "row index in test fits in u8"
+    )]
+    fn test_repack_phi3_fused_gate_up_pre_split() {
+        // Fused Gate-Up tensor: Gate (6 rows), Up (6 rows), total = 12 rows, cols = 32
+        let cols_32 = 32;
+        let total_rows = 12;
+        let shape = [cols_32, total_rows];
+        let mut q8_raw = vec![0_u8; 34 * total_rows];
+        for r in 0..total_rows {
+            let start = r * 34;
+            q8_raw[start..start + 2].copy_from_slice(&[0x00, 0x3C]);
+            q8_raw[start + 2..start + 34].fill((r as u8) + 10);
+        }
+
+        let q8_view =
+            TensorView::from_bytes("blk.0.ffn_up.weight", QuantType::Q8_0, &shape, 0, &q8_raw)
+                .expect("valid Q8_0 view");
+
+        let partitions = [6, 6];
+        let repacked = repack_phi3_fused_tensor_ime_8x16(&q8_view, &partitions)
+            .expect("repack gate-up succeeds");
+
+        assert_eq!(repacked.len(), 2);
+        // 6 rows padded to 8 rows * 2 chunks * 128 = 256 bytes per partition
+        assert_eq!(repacked[0].len(), 256);
+        assert_eq!(repacked[1].len(), 256);
+        assert_eq!(repacked[0][0], 10);
+        assert_eq!(repacked[1][0], 16);
+    }
+
+    #[test]
+    fn test_repack_phi3_fused_rejections() {
+        let cols = 32;
+        let total_rows = 8;
+        let shape = [cols, total_rows];
+        let q8_raw = vec![0_u8; 34 * total_rows];
+        let q8_view =
+            TensorView::from_bytes("blk.0.attn_qkv.weight", QuantType::Q8_0, &shape, 0, &q8_raw)
+                .unwrap();
+
+        // 1. Partition rows sum mismatch
+        let err_sum = repack_phi3_fused_tensor_ime_8x16(&q8_view, &[4, 2])
+            .expect_err("partition sum mismatch");
+        assert!(matches!(err_sum, K3Error::TensorBoundsError { .. }));
+        assert!(
+            err_sum
+                .to_string()
+                .contains("partition rows sum (6) does not match")
+        );
+
+        // 2. Column dimension not divisible by TILE_K (16)
+        // A 1D tensor
+        let shape_1d = [32];
+        let raw_1d = vec![0u8; 128];
+        let view_1d = TensorView::from_bytes("1d", QuantType::F32, &shape_1d, 0, &raw_1d).unwrap();
+        let err_1d = repack_phi3_fused_tensor_ime_8x16(&view_1d, &[32]).expect_err("requires 2D");
+        assert!(matches!(err_1d, K3Error::TensorBoundsError { .. }));
     }
 }

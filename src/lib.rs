@@ -43,7 +43,8 @@ pub use store::{
     ENV_STORE_ROOT, GcReport, HighWaterMarkWarning, MAX_PATH_COMPONENT_LEN, MockProcMapsScanner,
     ModelManifest, ProcessMappingInfo, ProcessMapsScanner, RealProcMapsScanner, RecipeDescriptor,
     ResolvedAlias, RetentionPolicy, Sha256, StaleRecipeOutcome, StorageGarbageCollector,
-    check_derived_memory_admission, hex_encode, parse_alias_id, validate_path_component,
+    check_derived_memory_admission, hex_encode, parse_alias_id, repack_phi3_fused_tensor_ime_8x16,
+    validate_path_component,
 };
 
 pub use protocol::{
