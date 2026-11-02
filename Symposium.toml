@@ -1,0 +1,14 @@
+name = "k3-manager"
+# Crate-embedded Symposium manifest for k3-manager.
+
+[[plugins]]
+depends-on = ["k3-core"]
+source.cargo = "k3-core"
+
+[[plugins]]
+depends-on = ["k3-tokenizer"]
+source.cargo = "k3-tokenizer"
+
+[[plugins]]
+depends-on = ["muobserve-ipc"]
+source.cargo = "muobserve-ipc"

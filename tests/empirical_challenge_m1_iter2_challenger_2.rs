@@ -446,10 +446,11 @@ fn test_capability_filtering_uncompiled_recipes_and_revisions() {
         ("qwen3.5", "1.0.0", "Q4_K_M"),
         ("llama-3.2", "1.0.0", "Q4_K_M"),
         ("deepseek-v3", "1.0.0", "Q4_K_M"),
-        ("mistral", "1.0.0", "Q4_K_M"),
+        ("gemma", "1.0.0", "Q4_K_M"),
+        ("mistral", "0.1.0", "Q4_K_M"), // mistral is compiled at 1.0.0 only
         ("synthetic", "2.0.0", "Q4_K_M"), // synthetic is compiled at 1.0.0 only
-        ("qwen3", "0.9.0", "Q4_K_M"),     // older recipe version
-        ("qwen3", "1.1.0", "Q4_K_M"),     // newer recipe version
+        ("qwen3", "0.9.0", "Q4_K_M"),   // older recipe version
+        ("qwen3", "1.1.0", "Q4_K_M"),   // newer recipe version
         ("qwen3", "2.0.0", "Q4_K_M"),
         ("llama", "0.1.0", "Q4_K_M"),
         ("llama", "3.0.0", "Q4_K_M"),

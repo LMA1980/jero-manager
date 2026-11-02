@@ -90,10 +90,43 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         RecipeDescriptor {
             architecture_id: "llama",
             recipe_version: "1.0.0",
-            supported_quants: &["Q4_K_M", "F32", "F16", "BF16"],
-            target_layouts: &["native"],
+            supported_quants: &["Q4_K_M", "Q8_0", "Q6_K", "F32", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
             default_chat_template: Some(llama_template),
             special_tokens: Some(llama_stop),
+        },
+    );
+
+    // 4. Mistral base recipe (ADR-023)
+    let mistral_template = ChatTemplate::new(Some("[INST] {{prompt}} [/INST]".to_owned()));
+    let mistral_stop = SpecialTokens {
+        stop_tokens: vec![2], // </s>
+        eot_token_id: Some(2),
+        ..Default::default()
+    };
+
+    map.insert(
+        "mistral@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "mistral",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q4_K_M", "Q8_0", "Q6_K", "F32", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(mistral_template.clone()),
+            special_tokens: Some(mistral_stop.clone()),
+        },
+    );
+
+    // 5. Mixtral Sparse MoE recipe (ADR-023)
+    map.insert(
+        "mixtral@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "mixtral",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q4_0", "Q4_K_M", "Q8_0", "Q6_K", "F32", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(mistral_template),
+            special_tokens: Some(mistral_stop),
         },
     );
 
@@ -221,6 +254,30 @@ impl CapabilityFilter {
                         quantization_supported: true,
                         reason: Some("model context length must be greater than 0".to_owned()),
                     }
+                } else if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
+                    if let Err(err) = k3_arch_mistral::evaluate_moe_memlock_admission(
+                        manifest,
+                        k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
+                    ) {
+                        CandidateSuitability {
+                            executable: false,
+                            architecture_id: manifest.architecture_id.clone(),
+                            recipe_version: manifest.recipe_version.clone(),
+                            quantization_supported: true,
+                            reason: Some(format!(
+                                "{err}: {}",
+                                k3_arch_mistral::COMPACT_MOE_ADVISORY
+                            )),
+                        }
+                    } else {
+                        CandidateSuitability {
+                            executable: true,
+                            architecture_id: manifest.architecture_id.clone(),
+                            recipe_version: manifest.recipe_version.clone(),
+                            quantization_supported: true,
+                            reason: None,
+                        }
+                    }
                 } else {
                     CandidateSuitability {
                         executable: true,
@@ -304,6 +361,14 @@ impl CapabilityFilter {
             });
         }
 
+        // MoE memlock admission check for Mixtral
+        if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
+            k3_arch_mistral::evaluate_moe_memlock_admission(
+                manifest,
+                k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
+            )?;
+        }
+
         Ok(desc.clone())
     }
 
@@ -345,5 +410,68 @@ impl CapabilityFilter {
             chat_template,
             special_tokens,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mistral_and_mixtral_descriptors_registered() {
+        let recipes = CapabilityFilter::supported_recipes();
+        assert!(recipes.contains(&"mistral@1.0.0".to_owned()));
+        assert!(recipes.contains(&"mixtral@1.0.0".to_owned()));
+
+        assert!(CapabilityFilter::is_supported("mistral", "1.0.0"));
+        assert!(CapabilityFilter::is_supported("mixtral", "1.0.0"));
+    }
+
+    #[test]
+    fn test_mistral_chat_template_alignment() {
+        let env = CapabilityFilter::align_prompt_environment("mistral", "1.0.0")
+            .expect("mistral alignment succeeds");
+        assert_eq!(env.architecture_id, "mistral");
+
+        let formatted = env.chat_template.format_prompt("Tell me about K3");
+        assert_eq!(formatted, "[INST] Tell me about K3 [/INST]");
+        assert!(env.is_stop_token(2));
+    }
+
+    #[test]
+    fn test_mixtral_admission_in_evaluate_candidate() {
+        // Oversized Mixtral Q4_K_M with 32K context rejected with advisory
+        let oversized = ModelManifest::new(
+            "gguf",
+            "mixtral",
+            "1.0.0",
+            "Q4_K_M",
+            32_768,
+            "sha256:oversized",
+            28_990_000_000,
+        );
+        let suitability = CapabilityFilter::evaluate_candidate(&oversized);
+        assert!(!suitability.executable);
+        assert!(
+            suitability
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("Mixtral-8x7B in Q4_K_M exceeds 28 GiB")
+        );
+
+        // Admitted Mixtral Q4_0 with 4K context
+        let admitted = ModelManifest::new(
+            "gguf",
+            "mixtral",
+            "1.0.0",
+            "Q4_0",
+            4096,
+            "sha256:admitted",
+            26_300_000_000,
+        );
+        let suitability_admitted = CapabilityFilter::evaluate_candidate(&admitted);
+        assert!(suitability_admitted.executable);
+        assert!(suitability_admitted.reason.is_none());
     }
 }
