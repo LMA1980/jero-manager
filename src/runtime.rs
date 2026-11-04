@@ -1953,6 +1953,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_runtime_thread_pool_and_affinity_binding() {
         let capacity = ControlPlaneCapacityConfig::default()
             .resolve_default()
@@ -1976,6 +1977,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_control_task_round_robin_dispatch() {
         let runtime = build_test_runtime();
 
@@ -1992,6 +1994,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_queue_depth_tracking() {
         let runtime = build_test_runtime();
         assert_eq!(runtime.queue_depth(), 0);
@@ -2007,6 +2010,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_model_placement_and_worker_health_snapshots() {
         let runtime = build_test_runtime();
         assert!(runtime.active_model_placements().is_empty());
@@ -2042,6 +2046,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_admin_commands_dispatch() {
         let runtime = build_test_runtime();
 
@@ -2137,6 +2142,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_unprofiled_model_registration_and_status_query() {
         let runtime = build_test_runtime();
 
@@ -2187,6 +2193,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_v1_models_listing_and_json_serialization() {
         let runtime = build_test_runtime();
 
@@ -2239,6 +2246,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_operator_tuning_profile_application_clears_unprofiled() {
         let runtime = build_test_runtime();
 
@@ -2302,6 +2310,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_audit_event_logging_lifecycle() {
         let runtime = build_test_runtime();
         runtime.clear_audit_events();
