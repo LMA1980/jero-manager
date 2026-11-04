@@ -152,6 +152,52 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
+    // 7. BitNet base recipe (ADR-023, ADR-024, ADR-037)
+    let bitnet_template = ChatTemplate::new(Some(
+        "<|im_start|>user\n{{prompt}}<|im_end|>\n<|im_start|>assistant\n".to_owned(),
+    ));
+    let bitnet_stop = SpecialTokens {
+        stop_tokens: vec![2, 32000],
+        eot_token_id: Some(2),
+        ..Default::default()
+    };
+
+    map.insert(
+        "bitnet@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "bitnet",
+            recipe_version: "1.0.0",
+            supported_quants: &["TQ1_0", "TQ2_0", "Q8_0", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(bitnet_template.clone()),
+            special_tokens: Some(bitnet_stop.clone()),
+        },
+    );
+
+    map.insert(
+        "bitnet-b1.58@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "bitnet-b1.58",
+            recipe_version: "1.0.0",
+            supported_quants: &["TQ1_0", "TQ2_0", "Q8_0", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(bitnet_template.clone()),
+            special_tokens: Some(bitnet_stop.clone()),
+        },
+    );
+
+    map.insert(
+        "bitnet-25@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "bitnet-25",
+            recipe_version: "1.0.0",
+            supported_quants: &["TQ1_0", "TQ2_0", "Q8_0", "F16", "BF16"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(bitnet_template),
+            special_tokens: Some(bitnet_stop),
+        },
+    );
+
     RwLock::new(map)
 });
 
@@ -510,5 +556,112 @@ mod tests {
         );
         assert!(env.is_stop_token(32000));
         assert!(env.is_stop_token(32007));
+    }
+
+    #[test]
+    fn test_bitnet_filter_registration() {
+        // 1. Registry presence
+        let recipes = CapabilityFilter::supported_recipes();
+        assert!(recipes.contains(&"bitnet@1.0.0".to_owned()));
+        assert!(recipes.contains(&"bitnet-b1.58@1.0.0".to_owned()));
+        assert!(recipes.contains(&"bitnet-25@1.0.0".to_owned()));
+
+        assert!(CapabilityFilter::is_supported("bitnet", "1.0.0"));
+        assert!(CapabilityFilter::is_supported("bitnet-b1.58", "1.0.0"));
+        assert!(CapabilityFilter::is_supported("bitnet-25", "1.0.0"));
+        assert!(!CapabilityFilter::is_supported("bitnet", "2.0.0"));
+
+        // 2. Candidate evaluation - Admitted
+        let manifest_tq1 = ModelManifest::new(
+            "gguf",
+            "bitnet-b1.58",
+            "1.0.0",
+            "TQ1_0",
+            2048,
+            "sha256:bitnet",
+            2_000_000_000,
+        );
+        let suit_tq1 = CapabilityFilter::evaluate_candidate(&manifest_tq1);
+        assert!(suit_tq1.executable);
+        assert!(suit_tq1.quantization_supported);
+        assert!(suit_tq1.reason.is_none());
+
+        let manifest_tq2 = ModelManifest::new(
+            "gguf",
+            "bitnet-25",
+            "1.0.0",
+            "TQ2_0",
+            4096,
+            "sha256:bitnet25",
+            2_500_000_000,
+        );
+        let suit_tq2 = CapabilityFilter::evaluate_candidate(&manifest_tq2);
+        assert!(suit_tq2.executable);
+
+        // 3. Candidate evaluation - Rejected unsupported quantization
+        let manifest_q4 = ModelManifest::new(
+            "gguf",
+            "bitnet-b1.58",
+            "1.0.0",
+            "Q4_K_M",
+            2048,
+            "sha256:q4",
+            2_000_000_000,
+        );
+        let suit_q4 = CapabilityFilter::evaluate_candidate(&manifest_q4);
+        assert!(!suit_q4.executable);
+        assert!(!suit_q4.quantization_supported);
+        assert!(
+            suit_q4
+                .reason
+                .unwrap()
+                .contains("quantization format 'Q4_K_M' is not supported")
+        );
+
+        // 4. Load-time validation
+        let desc =
+            CapabilityFilter::validate_model_manifest(&manifest_tq1).expect("valid manifest");
+        assert_eq!(desc.architecture_id, "bitnet-b1.58");
+        assert_eq!(
+            desc.supported_quants,
+            &["TQ1_0", "TQ2_0", "Q8_0", "F16", "BF16"]
+        );
+        assert_eq!(desc.target_layouts, &["native", "ime_tile_8x16"]);
+
+        // 5. Prompt environment alignment
+        let env = CapabilityFilter::align_prompt_environment("bitnet-b1.58", "1.0.0")
+            .expect("alignment succeeds");
+        assert_eq!(env.architecture_id, "bitnet-b1.58");
+        assert!(env.is_stop_token(2));
+        assert!(env.is_stop_token(32000));
+    }
+
+    #[test]
+    fn test_bitnet_capability_ids() {
+        let expected_archs = ["bitnet", "bitnet-b1.58", "bitnet-25"];
+        let expected_quants = ["TQ1_0", "TQ2_0", "Q8_0", "F16", "BF16"];
+
+        for arch in expected_archs {
+            assert!(
+                CapabilityFilter::is_supported(arch, "1.0.0"),
+                "CapabilityFilter must support {arch}@1.0.0"
+            );
+
+            let manifest = ModelManifest::new(
+                "gguf",
+                arch,
+                "1.0.0",
+                "TQ1_0",
+                2048,
+                "sha256:dummy",
+                1_000_000,
+            );
+            let desc = CapabilityFilter::validate_model_manifest(&manifest)
+                .unwrap_or_else(|_| panic!("manifest validation must succeed for {arch}"));
+            assert_eq!(desc.architecture_id, arch);
+            assert_eq!(desc.recipe_version, "1.0.0");
+            assert_eq!(desc.supported_quants, expected_quants);
+            assert_eq!(desc.target_layouts, &["native", "ime_tile_8x16"]);
+        }
     }
 }

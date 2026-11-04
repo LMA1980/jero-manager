@@ -1641,6 +1641,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_spawn_worker_rejects_unprofiled_on_a100() {
         let dummy_weights = PathBuf::from("/tmp/weights.gguf");
         let dummy_socket = PathBuf::from("/tmp/socket.sock");
@@ -1667,6 +1668,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_spawn_worker_rejects_unprofiled_with_core_lending() {
         let dummy_weights = PathBuf::from("/tmp/weights.gguf");
         let dummy_socket = PathBuf::from("/tmp/socket.sock");
