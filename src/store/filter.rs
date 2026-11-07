@@ -12,47 +12,6 @@ use k3_tokenizer::{ChatTemplate, SpecialTokens, Tokenizer};
 
 use super::cas::ModelManifest;
 
-fn evaluate_mixtral_memlock_admission(
-    manifest: &ModelManifest,
-    limit_memlock_bytes: u64,
-) -> Result<(), K3Error> {
-    if !manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-        return Ok(());
-    }
-    let limit = if limit_memlock_bytes == 0 {
-        k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES
-    } else {
-        limit_memlock_bytes
-    };
-    let weight_bytes_raw = if manifest.weight_size_bytes > 0 {
-        manifest.weight_size_bytes
-    } else {
-        match manifest.quantization.to_ascii_uppercase().as_str() {
-            "Q4_K_M" => 28_990_000_000,
-            "Q6_K" => 40_800_000_000,
-            "Q8_0" => 53_150_000_000,
-            "F16" | "BF16" => 100_200_000_000,
-            _ => 26_300_000_000,
-        }
-    };
-    let weight_bytes = weight_bytes_raw.next_multiple_of(4096);
-    let kv_bytes = manifest
-        .context_length
-        .saturating_mul(k3_arch_mistral::admission::MIXTRAL_KV_BYTES_PER_TOKEN)
-        .next_multiple_of(4096);
-    let total_required = weight_bytes.saturating_add(kv_bytes);
-    if total_required > limit {
-        return Err(K3Error::InsufficientLockableMemory {
-            required_bytes: total_required,
-            weight_bytes,
-            kv_bytes,
-            available_bytes: limit,
-            rlimit_memlock_bytes: limit,
-        });
-    }
-    Ok(())
-}
-
 /// Information describing a compiled architecture recipe and its capabilities.
 #[derive(Debug, Clone)]
 pub struct RecipeDescriptor {
@@ -391,7 +350,7 @@ impl CapabilityFilter {
                         reason: Some("model context length must be greater than 0".to_owned()),
                     }
                 } else if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-                    if let Err(err) = evaluate_mixtral_memlock_admission(
+                    if let Err(err) = k3_arch_mistral::evaluate_moe_memlock_admission(
                         manifest,
                         k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
                     ) {
@@ -499,7 +458,7 @@ impl CapabilityFilter {
 
         // MoE memlock admission check for Mixtral
         if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-            evaluate_mixtral_memlock_admission(
+            k3_arch_mistral::evaluate_moe_memlock_admission(
                 manifest,
                 k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
             )?;
