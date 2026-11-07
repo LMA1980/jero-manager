@@ -15,9 +15,22 @@ use k3_core::K3Error;
 use k3_core::affinity::{
     A100_CLUSTER_MASK, DEFAULT_X100_COMPUTE_CAP_MASK, ResolvedControlCapacity, SOC_CLUSTER_MASK,
 };
+pub use k3_core::profile::TuningProfile;
 
 use crate::error::ManagerError;
 use crate::supervisor::WorkerPlacement;
+
+/// Validates optional Dory recurrent loop and KV cache mode overrides on a [`TuningProfile`].
+///
+/// # Errors
+///
+/// Returns [`ManagerError`] if `recurrent_loops` is outside `1..=4` or `recurrent_kv_cache_mode`
+/// is neither `"per_loop"` nor `"last_loop"`.
+pub fn validate_tuning_profile_dory_overrides(profile: &TuningProfile) -> Result<(), ManagerError> {
+    profile
+        .validate_dory_overrides()
+        .map_err(ManagerError::from)
+}
 
 // ============================================================================
 // Canonical cpuset.cpus list syntax formatter and parser
@@ -1148,5 +1161,43 @@ mod tests {
         assert!(res.mode.is_os_affinity_fallback());
         assert!(aff.has_called(5005, 0xFF00));
         assert_eq!(aff.ai_thread_writes(), vec![5005]);
+    }
+
+    #[test]
+    fn test_tuning_profile_dory_loop_overrides() {
+        let default_profile = TuningProfile::conservative_default();
+        assert_eq!(default_profile.recurrent_loops, None);
+        assert_eq!(default_profile.recurrent_kv_cache_mode, None);
+        validate_tuning_profile_dory_overrides(&default_profile).unwrap();
+
+        let tuned = default_profile
+            .clone()
+            .with_dory_overrides(Some(4), Some("last_loop".to_string()))
+            .unwrap();
+        assert_eq!(tuned.recurrent_loops, Some(4));
+        assert_eq!(tuned.recurrent_kv_cache_mode.as_deref(), Some("last_loop"));
+        validate_tuning_profile_dory_overrides(&tuned).unwrap();
+
+        let json = serde_json::to_string(&tuned).unwrap();
+        let roundtrip: TuningProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.recurrent_loops, Some(4));
+        assert_eq!(
+            roundtrip.recurrent_kv_cache_mode.as_deref(),
+            Some("last_loop")
+        );
+
+        assert!(
+            default_profile
+                .clone()
+                .with_dory_overrides(Some(5), None)
+                .is_err()
+        );
+        let mut bad_loops = default_profile.clone();
+        bad_loops.recurrent_loops = Some(5);
+        assert!(validate_tuning_profile_dory_overrides(&bad_loops).is_err());
+
+        let mut bad_mode = default_profile;
+        bad_mode.recurrent_kv_cache_mode = Some("invalid_mode".to_string());
+        assert!(validate_tuning_profile_dory_overrides(&bad_mode).is_err());
     }
 }

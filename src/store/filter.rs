@@ -198,6 +198,33 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
+    // 8. NVIDIA Nemotron-Labs Dory1.0 looped latent-recurrent nGPT recipe ("dory")
+    let dory_template = ChatTemplate::new(Some(
+        "<s><|im_start|>user\n{{prompt}}<|im_end|>\n<|im_start|>assistant\n<think>\n".to_owned(),
+    ));
+    let dory_stop = SpecialTokens {
+        bos_token_id: Some(1),
+        eos_token_id: Some(2),
+        eot_token_id: Some(2),
+        stop_tokens: vec![2],
+        stop_sequences: vec!["<|im_end|>".to_owned()],
+        ..Default::default()
+    };
+
+    map.insert(
+        "dory@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "dory",
+            recipe_version: "1.0.0",
+            supported_quants: &[
+                "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+            ],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(dory_template),
+            special_tokens: Some(dory_stop),
+        },
+    );
+
     RwLock::new(map)
 });
 

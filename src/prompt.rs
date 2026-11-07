@@ -9,11 +9,40 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use k3_core::K3Error;
 pub use k3_tokenizer::{
-    ChatTemplate, DetokenizeStep, GgufTokenizer, SimpleTokenizer, SpecialTokens,
-    StreamingDetokenizer, TokenType, Tokenizer,
+    ChatTemplate, DORY_BOS_TOKEN, DORY_EOS_TOKEN, DORY_MEDIUM_REASONING_SUFFIX, DetokenizeStep,
+    GgufTokenizer, SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
+    format_dory_chatml_prompt,
 };
 
 use crate::error::ManagerError;
+
+/// Maps per-request OpenAI/Anthropic `reasoning_effort` (`"low"` -> `1`, `"medium"` -> `2`, `"high"` -> `4`)
+/// to the active Dory recurrent loop count $K \in [1, 4]$ without reloading weights, falling back to
+/// `profile_override` and then `default_loops` when `reasoning_effort` is omitted.
+#[must_use]
+pub fn resolve_dory_loop_budget(
+    default_loops: u32,
+    profile_override: Option<u32>,
+    reasoning_effort: Option<&str>,
+) -> u32 {
+    if let Some(effort) = reasoning_effort.map(str::trim) {
+        if effort.eq_ignore_ascii_case("low") {
+            return 1;
+        }
+        if effort.eq_ignore_ascii_case("medium") {
+            return 2;
+        }
+        if effort.eq_ignore_ascii_case("high") {
+            return 4;
+        }
+    }
+
+    if let Some(override_loops) = profile_override {
+        return override_loops.clamp(1, 4);
+    }
+
+    default_loops.clamp(1, 4)
+}
 
 /// Formats a user prompt according to the given chat template rules.
 #[must_use]
@@ -698,5 +727,30 @@ mod tests {
         );
         assert!(orchestrator.format_prompt("unknown", "test").is_err());
         assert!(orchestrator.is_stop_token("unknown", 2).is_err());
+    }
+
+    #[test]
+    fn test_dory_reasoning_effort_loop_mapping() {
+        // Explicit reasoning_effort overrides both profile_override and default_loops
+        assert_eq!(resolve_dory_loop_budget(2, None, Some("low")), 1);
+        assert_eq!(resolve_dory_loop_budget(1, Some(4), Some("medium")), 2);
+        assert_eq!(resolve_dory_loop_budget(2, Some(1), Some("high")), 4);
+
+        // When reasoning_effort is omitted, falls back to profile_override then default_loops
+        assert_eq!(resolve_dory_loop_budget(2, Some(3), None), 3);
+        assert_eq!(resolve_dory_loop_budget(2, None, None), 2);
+        assert_eq!(resolve_dory_loop_budget(0, None, None), 1);
+        assert_eq!(resolve_dory_loop_budget(8, None, None), 4);
+
+        // Verify Dory ChatML + <think> formatting across low/medium/high effort
+        let medium_prompt = format_dory_chatml_prompt("Compute integral", Some("medium"), true);
+        assert!(medium_prompt.starts_with(DORY_BOS_TOKEN));
+        assert!(medium_prompt.contains(DORY_MEDIUM_REASONING_SUFFIX));
+        assert!(medium_prompt.contains(DORY_EOS_TOKEN));
+        assert!(medium_prompt.ends_with("<think>\n"));
+
+        let low_prompt = format_dory_chatml_prompt("Compute integral", Some("low"), true);
+        assert!(!low_prompt.contains(DORY_MEDIUM_REASONING_SUFFIX));
+        assert!(low_prompt.ends_with("<think></think>"));
     }
 }

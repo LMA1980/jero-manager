@@ -73,7 +73,7 @@ pub use domain::{
     CgroupFs, CgroupV2DomainController, DomainPlacementMode, IsolationDomainController,
     MockCgroupFs, MockOsAffinityBackend, OsAffinityBackend, PlacementOutcome, RealCgroupFs,
     RealOsAffinityBackend, format_cpuset_list, parse_cpuset_list, resolve_worker_compute_mask,
-    validate_model_id,
+    validate_model_id, validate_tuning_profile_dory_overrides,
 };
 pub use error::ManagerError;
 pub use health::{
@@ -96,10 +96,11 @@ pub use prefix::{
     PrefixMatchResult, PrefixRadixIndex,
 };
 pub use prompt::{
-    ChatTemplate, DetokenizeStep, GgufTokenizer, IncrementalStopDetector, PreparedPrompt,
-    PromptOrchestrator, PromptPreparationRequest, SimpleTokenizer, SpecialTokens,
-    StreamingDetokenizer, TokenType, Tokenizer, evaluate_stop_token, format_chat_prompt,
-    validate_and_tokenize,
+    ChatTemplate, DORY_BOS_TOKEN, DORY_EOS_TOKEN, DORY_MEDIUM_REASONING_SUFFIX, DetokenizeStep,
+    GgufTokenizer, IncrementalStopDetector, PreparedPrompt, PromptOrchestrator,
+    PromptPreparationRequest, SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType,
+    Tokenizer, evaluate_stop_token, format_chat_prompt, format_dory_chatml_prompt,
+    resolve_dory_loop_budget, validate_and_tokenize,
 };
 pub use queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_ESTIMATED_PASS_LATENCY_MS,
