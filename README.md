@@ -25,9 +25,9 @@ Control plane for the SpacemiT K3 AI platform.
 - **Model Subsystem**: Registry, model pull/search, and vendor adapters.
 
 ## Architecture & Specifications
-For master architecture and detailed component specifications, see the parent [model-runner](https://github.com/LMA1980/model-runner) repository:
-- Master Plan: [PLAN.md](https://github.com/LMA1980/model-runner/blob/main/PLAN.md)
-- Specs: [specs/](https://github.com/LMA1980/model-runner/tree/main/specs)
+For master architecture and detailed component specifications, see the parent [jero-runner](https://github.com/LMA1980/jero-runner) repository:
+- Master Plan: [PLAN.md](https://github.com/LMA1980/jero-runner/blob/main/PLAN.md)
+- Specs: [specs/](https://github.com/LMA1980/jero-runner/tree/main/specs)
 
 ## License
 
