@@ -20,11 +20,11 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use k3_core::ipc::layout::{ARENA_MAGIC, ARENA_VERSION, KvBlockTag};
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::client::KvClient;
-use k3_manager::dispatch::{ForwardPassRequest, wrap_input_tokens_as_arrow};
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_core::ipc::layout::{ARENA_MAGIC, ARENA_VERSION, KvBlockTag};
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::client::KvClient;
+use jero_manager::dispatch::{ForwardPassRequest, wrap_input_tokens_as_arrow};
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(100);
 

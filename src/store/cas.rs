@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::K3Error;
+use jero_core::K3Error;
 
 use super::sha256::Sha256;
 use crate::persistence::{
@@ -132,7 +132,7 @@ pub fn validate_sha256_digest(digest: &str) -> Result<(), K3Error> {
     Ok(())
 }
 
-pub use k3_core::ModelManifest;
+pub use jero_core::ModelManifest;
 
 /// Extension trait for computing SHA-256 digest on [`ModelManifest`].
 pub trait ModelManifestDigestExt {

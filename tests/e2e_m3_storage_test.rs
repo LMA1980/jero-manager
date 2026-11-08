@@ -23,10 +23,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use duckdb::{Connection, params};
-use k3_core::K3Error;
-use k3_core::profile::CONSTRAINED_TEST_N_CTX;
-use k3_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
-use k3_manager::store::{
+use jero_core::K3Error;
+use jero_core::profile::CONSTRAINED_TEST_N_CTX;
+use jero_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
+use jero_manager::store::{
     CapabilityFilter, ContentAddressedStore, ModelManifest, RetentionPolicy, Sha256,
     check_derived_memory_admission,
 };

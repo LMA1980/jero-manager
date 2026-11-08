@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use k3_core::error::K3Error;
+use jero_core::error::K3Error;
 
 /// Default maximum queue capacity per model (ADR-015).
 pub const DEFAULT_MAX_QUEUE_DEPTH: usize = 64;

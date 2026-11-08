@@ -9,10 +9,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use k3_core::K3Error;
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_manager::domain::MockOsAffinityBackend;
-use k3_manager::{
+use jero_core::K3Error;
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_manager::domain::MockOsAffinityBackend;
+use jero_manager::{
     AdminCommand, AdminResponse, ChatTemplate, ControlPlaneRuntime, IncrementalStopDetector,
     PrefixRadixIndex, PromptPreparationRequest, SimpleTokenizer, SpecialTokens, Tokenizer,
     format_chat_prompt, validate_and_tokenize,

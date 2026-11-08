@@ -73,13 +73,13 @@ pub use domain::{
     CgroupFs, CgroupV2DomainController, DomainPlacementMode, IsolationDomainController,
     MockCgroupFs, MockOsAffinityBackend, OsAffinityBackend, PlacementOutcome, RealCgroupFs,
     RealOsAffinityBackend, format_cpuset_list, parse_cpuset_list, resolve_worker_compute_mask,
-    validate_model_id,
+    validate_model_id, validate_tuning_profile_dory_overrides,
 };
 pub use error::ManagerError;
 pub use health::{
     HealthSupervisor, HealthSupervisorConfig, RecoveryAction, RecoveryAuditEvent, RecoveryTarget,
 };
-pub use k3_core::profile::{
+pub use jero_core::profile::{
     CONSERVATIVE_DEFAULT_A100_CORES, CONSERVATIVE_DEFAULT_N_CTX, CONSERVATIVE_DEFAULT_X100_CORES,
     CONSERVATIVE_TUNING_ADVISORY, CONSTRAINED_TEST_N_CTX, ComputePool, CostProfile, ModelEntry,
     ModelListResponse, ModelLoadAuditEvent, ModelProfile, PriorityClass, ProfileStatus,
@@ -96,10 +96,11 @@ pub use prefix::{
     PrefixMatchResult, PrefixRadixIndex,
 };
 pub use prompt::{
-    ChatTemplate, DetokenizeStep, GgufTokenizer, IncrementalStopDetector, PreparedPrompt,
-    PromptOrchestrator, PromptPreparationRequest, SimpleTokenizer, SpecialTokens,
-    StreamingDetokenizer, TokenType, Tokenizer, evaluate_stop_token, format_chat_prompt,
-    validate_and_tokenize,
+    ChatTemplate, DORY_BOS_TOKEN, DORY_EOS_TOKEN, DORY_MEDIUM_REASONING_SUFFIX, DetokenizeStep,
+    GgufTokenizer, IncrementalStopDetector, PreparedPrompt, PromptOrchestrator,
+    PromptPreparationRequest, SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType,
+    Tokenizer, evaluate_stop_token, format_chat_prompt, format_dory_chatml_prompt,
+    resolve_dory_loop_budget, validate_and_tokenize,
 };
 pub use queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_ESTIMATED_PASS_LATENCY_MS,

@@ -21,24 +21,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::{
     CONSERVATIVE_TUNING_ADVISORY, ComputePool, ModelListResponse, PriorityClass, TuningProfile,
 };
-use k3_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
-use k3_manager::flight::{FlightError, FlightStream, FlightTensorBatchStreamer, MemfdArena};
-use k3_manager::ingestion::{
+use jero_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
+use jero_manager::flight::{FlightError, FlightStream, FlightTensorBatchStreamer, MemfdArena};
+use jero_manager::ingestion::{
     AuthStatus, HuggingFaceAdapter, ModelFormat, PullRequest, SearchFilter, SourceAdapter,
     SourceCredentials,
 };
-use k3_manager::protocol::{
+use jero_manager::protocol::{
     ClaudeAdapter, ClaudeContent, ClaudeContentBlock, ClaudeErrorResponse, ClaudeMessage,
     ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem, ClaudeThinkingConfig, ClaudeTool,
     HttpRequest, HttpResponseBody, OpenAiChatRequest, OpenAiChatResponse, OpenAiErrorResponse,
     OpenAiFunction, OpenAiMessage, OpenAiTool, ProtocolServer, ProtocolServerConfig,
 };
-use k3_manager::queue::AdmissionQueueConfig;
-use k3_manager::runtime::{AdminCommand, ControlPlaneRuntime};
+use jero_manager::queue::AdmissionQueueConfig;
+use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime};
 
 static PROTOCOL_COUNTER: AtomicU64 = AtomicU64::new(1);
 

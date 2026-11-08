@@ -13,12 +13,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::ipc::layout::ArenaHeader;
-use k3_core::ipc::protocol::{IpcMessage, WorkerHeartbeatResponse, recv_msg_frame, send_msg_frame};
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_manager::domain::MockOsAffinityBackend;
-use k3_manager::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::ipc::layout::ArenaHeader;
+use jero_core::ipc::protocol::{
+    IpcMessage, WorkerHeartbeatResponse, recv_msg_frame, send_msg_frame,
+};
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_manager::domain::MockOsAffinityBackend;
+use jero_manager::{
     ControlPlaneRuntime, ForwardPassRequest, HealthSupervisor, ManagedWorker, ManagerError,
     RecoveryAction, RecoveryTarget, SimpleTokenizer, WorkerPlacement, WorkerSupervisor,
 };
@@ -198,7 +200,7 @@ fn test_sub_issue_76_watchdog_thread_affinity_pinning_spare_mask() {
     let mock_affinity = Arc::new(MockOsAffinityBackend::default());
     let mut supervisor = HealthSupervisor::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("create health supervisor");
 
@@ -230,14 +232,14 @@ fn test_sub_issue_76_runaway_control_task_lease_preemption_and_thread_replacemen
     let runtime = Arc::new(
         ControlPlaneRuntime::with_affinity_backend(
             capacity.clone(),
-            Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+            Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
         )
         .expect("runtime creation"),
     );
 
     let mut health_supervisor = HealthSupervisor::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("health supervisor")
     .with_control_runtime(Arc::clone(&runtime))
@@ -321,7 +323,7 @@ fn test_sub_issue_76_audit_events_recording_and_clearing() {
 
     assert!(supervisor.audit_events().is_empty());
 
-    let event = k3_manager::RecoveryAuditEvent {
+    let event = jero_manager::RecoveryAuditEvent {
         timestamp: std::time::Instant::now(),
         target: RecoveryTarget::ControlTask {
             task_id: 101,
@@ -354,7 +356,7 @@ fn test_sub_issue_76_watchdog_thread_affinity_failure_propagates_error() {
 
     let mut supervisor = HealthSupervisor::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("create health supervisor");
 
@@ -391,7 +393,7 @@ fn test_sub_issue_76_check_once_detects_unresponsive_worker_and_recovers() {
     let ws_arc = Arc::new(Mutex::new(ws));
     let supervisor = HealthSupervisor::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("health supervisor")
     .with_worker_supervisor(Arc::clone(&ws_arc));
@@ -432,7 +434,7 @@ fn test_sub_issue_76_control_plane_runtime_affinity_failure_propagates_error() {
 
     let rt_res = ControlPlaneRuntime::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     );
 
     assert!(
@@ -504,7 +506,7 @@ fn test_sub_issue_76_non_terminating_signals_preserve_worker_stream_and_liveness
 #[derive(Debug)]
 struct PanickingOsAffinityBackend;
 
-impl k3_manager::OsAffinityBackend for PanickingOsAffinityBackend {
+impl jero_manager::OsAffinityBackend for PanickingOsAffinityBackend {
     fn set_affinity(&self, _pid: u32, _mask: u64) -> Result<(), ManagerError> {
         panic!("simulated panic inside affinity backend during thread initialization");
     }
@@ -540,7 +542,7 @@ fn test_sub_issue_76_supervisor_config_timeouts_applied_to_worker_health_checks(
     let mock_affinity = Arc::new(MockOsAffinityBackend::default());
     let supervisor = HealthSupervisor::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("health supervisor")
     .with_heartbeat_timeout(Duration::from_millis(77))
@@ -562,7 +564,7 @@ fn test_sub_issue_76_worker_health_snapshot_updates_pid_on_recovery() {
     let mock_affinity = Arc::new(MockOsAffinityBackend::default());
     let runtime = ControlPlaneRuntime::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("runtime creation");
 

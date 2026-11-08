@@ -35,8 +35,8 @@ use crate::telemetry::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::affinity::ResolvedControlCapacity;
-pub use k3_core::profile::{
+use jero_core::affinity::ResolvedControlCapacity;
+pub use jero_core::profile::{
     CONSERVATIVE_DEFAULT_A100_CORES, CONSERVATIVE_DEFAULT_N_CTX, CONSERVATIVE_DEFAULT_X100_CORES,
     CONSERVATIVE_TUNING_ADVISORY, CONSTRAINED_TEST_N_CTX, ComputePool, ModelEntry,
     ModelListResponse, ModelLoadAuditEvent, ModelProfile, PriorityClass, ProfileStatus,
@@ -364,7 +364,7 @@ pub enum AdminResponse {
     /// Model operational audit event history.
     AuditEvents(Vec<ModelAuditEvent>),
     /// Tuning advisory recommendation generated on demand (US-08 Scenario 2).
-    TuningAdvisory(k3_core::profile::TuningAdvisory),
+    TuningAdvisory(jero_core::profile::TuningAdvisory),
     /// Diagnostic replay result containing matched status and replayed response (US-17).
     DiagnosticReplay(DiagnosticReplayResult),
 }
@@ -620,7 +620,7 @@ impl ControlPlaneRuntime {
         self
     }
 
-    /// Emits W3C-traced [`muobserve_ipc::OtelSpanEntry`] and hardware-tagged [`muobserve_ipc::OtelMetricEntry`]
+    /// Emits W3C-traced [`mu_observable_ipc::OtelSpanEntry`] and hardware-tagged [`mu_observable_ipc::OtelMetricEntry`]
     /// batches for an inference request and streams them to `MuObserve-collector` with non-blocking fallback.
     #[allow(clippy::too_many_arguments)]
     pub async fn emit_inference_telemetry_for_request(
@@ -1941,7 +1941,7 @@ impl Drop for ControlPlaneRuntime {
 mod tests {
     use super::*;
     use crate::domain::MockOsAffinityBackend;
-    use k3_core::affinity::ControlPlaneCapacityConfig;
+    use jero_core::affinity::ControlPlaneCapacityConfig;
 
     fn build_test_runtime() -> ControlPlaneRuntime {
         let capacity = ControlPlaneCapacityConfig::default()

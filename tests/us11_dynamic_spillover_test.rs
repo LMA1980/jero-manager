@@ -20,13 +20,13 @@
 
 use std::sync::Arc;
 
-use k3_core::affinity::{
+use jero_core::affinity::{
     ControlPlaneCapacityConfig, DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_SPARE_RECOVERY_MASK,
     ResolvedControlCapacity,
 };
-use k3_core::profile::{ProfileStatus, TuningProfile};
-use k3_manager::error::ManagerError;
-use k3_manager::scheduler::MultiModelScheduler;
+use jero_core::profile::{ProfileStatus, TuningProfile};
+use jero_manager::error::ManagerError;
+use jero_manager::scheduler::MultiModelScheduler;
 
 fn setup_capacity() -> ResolvedControlCapacity {
     ControlPlaneCapacityConfig::default()

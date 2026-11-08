@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use k3_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
-use k3_manager::store::{
+use jero_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
+use jero_manager::store::{
     ContentAddressedStore, DEFAULT_STORE_ROOT, ENV_STORE_ROOT, StorageGarbageCollector,
 };
 

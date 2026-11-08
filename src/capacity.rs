@@ -5,7 +5,7 @@
 //! dispatch, health supervisor watchdog core binding, and compute worker placement validation
 //! per ADR-007, ADR-008, ADR-041, and Issue #69.
 
-pub use k3_core::affinity::{
+pub use jero_core::affinity::{
     A100_CLUSTER_MASK, A100_DEFAULT_MAX_COMPUTE_THREADS, ActiveControlRotator,
     ControlPlaneCapacityConfig, DEFAULT_A100_MAX_COMPUTE_CORES, DEFAULT_ACTIVE_CONTROL_MASK,
     DEFAULT_MAX_A100_COMPUTE_CORES, DEFAULT_MAX_X100_COMPUTE_CORES, DEFAULT_SPARE_RECOVERY_MASK,
@@ -13,7 +13,7 @@ pub use k3_core::affinity::{
     SOC_CLUSTER_MASK, X100_CLUSTER_MASK, X100_DEFAULT_MAX_COMPUTE_THREADS,
 };
 
-use k3_core::K3Error;
+use jero_core::K3Error;
 
 use crate::error::ManagerError;
 use crate::supervisor::WorkerPlacement;

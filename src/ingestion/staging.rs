@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::K3Error;
+use jero_core::K3Error;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use super::adapter::{IngestionError, ModelFormat, PullProgress, StagingDownload};

@@ -29,11 +29,13 @@ use std::collections::HashMap;
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use k3_core::affinity::{
+use jero_core::affinity::{
     A100_CLUSTER_MASK, DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_SPARE_RECOVERY_MASK,
     DEFAULT_X100_COMPUTE_CAP_MASK, ResolvedControlCapacity,
 };
-use k3_core::profile::{CostProfile, PriorityClass, ProfileStatus, TuningAdvisory, TuningProfile};
+use jero_core::profile::{
+    CostProfile, PriorityClass, ProfileStatus, TuningAdvisory, TuningProfile,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ManagerError;
@@ -440,7 +442,7 @@ impl MultiModelScheduler {
 
         // Validate compute mask against SoC isolation boundaries (ADR-007, ADR-041)
         if (reservation_mask & self.capacity.active_control_mask) != 0 {
-            return Err(ManagerError::Affinity(k3_core::K3Error::AffinityError {
+            return Err(ManagerError::Affinity(jero_core::K3Error::AffinityError {
                 requested_mask: reservation_mask,
                 requested_threads: reservation_mask.count_ones() as usize,
                 reason: format!(

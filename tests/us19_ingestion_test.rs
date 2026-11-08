@@ -26,13 +26,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use k3_manager::ingestion::{
+use jero_manager::ingestion::{
     AuthStatus, GgufHeaderPrefix, HuggingFaceAdapter, IngestionError, LocalFileAdapter,
     ModelFormat, OllamaAdapter, PullRequest, SafeTensorsHeaderPrefix, SearchFilter, SourceAdapter,
     SourceAdapterRegistry, SourceCredentials, StagingPipeline,
 };
-use k3_manager::persistence::DuckDbPersistenceStore;
-use k3_manager::store::Sha256;
+use jero_manager::persistence::DuckDbPersistenceStore;
+use jero_manager::store::Sha256;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -354,7 +354,7 @@ fn test_atomic_promotion_and_deduplication() {
 
     let db_path = store_root.join("catalog.duckdb");
     let catalog = Arc::new(DuckDbPersistenceStore::open(&db_path).unwrap())
-        as Arc<dyn k3_manager::persistence::CasCatalog>;
+        as Arc<dyn jero_manager::persistence::CasCatalog>;
 
     let payload = create_valid_gguf_payload("dedup_model");
     let digest = Sha256::digest(&payload);

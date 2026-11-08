@@ -27,16 +27,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use k3_core::K3Error;
-use k3_manager::persistence::{
+use jero_core::K3Error;
+use jero_manager::persistence::{
     BlobReferenceRecord, CasCatalog, DerivedBlobRecord, DuckDbPersistenceStore, ModelAliasRecord,
     ModelBlobRecord, ModelManifestRecord,
 };
-use k3_manager::store::{
+use jero_manager::store::{
     CapabilityFilter, ContentAddressedStore, DerivedBlobManager, DerivedResolution, ModelManifest,
     RetentionPolicy, Sha256, StaleRecipeOutcome, check_derived_memory_admission,
 };
-use k3_tokenizer::SimpleTokenizer;
+use jero_tokenizer::SimpleTokenizer;
 
 static GLOBAL_TEST_COUNTER: AtomicU64 = AtomicU64::new(7000);
 

@@ -10,11 +10,11 @@
 
 use std::time::Duration;
 
-use k3_core::ipc::layout::{ARENA_MAGIC, ARENA_VERSION};
-use k3_core::ipc::protocol::StatusCode;
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::client::KvClient;
-use k3_manager::error::ManagerError;
+use jero_core::ipc::layout::{ARENA_MAGIC, ARENA_VERSION};
+use jero_core::ipc::protocol::StatusCode;
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::client::KvClient;
+use jero_manager::error::ManagerError;
 
 #[test]
 fn test_kv_client_lifecycle_and_arena_allocation() {

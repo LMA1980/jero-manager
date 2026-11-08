@@ -15,13 +15,13 @@
     clippy::useless_vec
 )]
 
-use k3_core::error::K3Error;
-use k3_core::ipc::layout::{ArenaHeader, KvBlockMeta, TAG_FREE, TAG_PERSIST, TAG_VOLATILE};
-use k3_core::ipc::protocol::StatusCode;
-use k3_core::ipc::shm::{DEFAULT_LIMIT_MEMLOCK_BYTES, SharedMemoryArena};
-use k3_kv::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
-use k3_manager::prompt::validate_and_tokenize;
-use k3_tokenizer::SimpleTokenizer;
+use jero_core::error::K3Error;
+use jero_core::ipc::layout::{ArenaHeader, KvBlockMeta, TAG_FREE, TAG_PERSIST, TAG_VOLATILE};
+use jero_core::ipc::protocol::StatusCode;
+use jero_core::ipc::shm::{DEFAULT_LIMIT_MEMLOCK_BYTES, SharedMemoryArena};
+use jero_kv_cache::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
+use jero_manager::prompt::validate_and_tokenize;
+use jero_tokenizer::SimpleTokenizer;
 
 #[test]
 fn test_us14_load_time_memory_admission_rejection_status_11() {
@@ -92,7 +92,7 @@ fn test_us14_dedicated_per_model_arenas_and_intra_arena_lru_eviction() {
         SharedMemoryArena::create("model-b-shm", 2048 * 1024).expect("create arena b");
 
     let header_a = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 1024 * 1024,
         block_count: 4,
@@ -101,7 +101,7 @@ fn test_us14_dedicated_per_model_arenas_and_intra_arena_lru_eviction() {
     };
 
     let header_b = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 2048 * 1024,
         block_count: 2,

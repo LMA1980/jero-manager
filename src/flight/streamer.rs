@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use arrow_array::{Array, BinaryArray, RecordBatch, StringArray, UInt32Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use k3_core::K3Error;
+use jero_core::K3Error;
 
 use super::memfd::FlightError;
 

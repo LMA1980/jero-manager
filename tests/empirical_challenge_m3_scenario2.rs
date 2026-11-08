@@ -27,15 +27,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::{
     CONSERVATIVE_DEFAULT_N_CTX, CONSERVATIVE_TUNING_ADVISORY, ComputePool, ModelListResponse,
     PriorityClass, ProfileStatus, TuningProfile,
 };
-use k3_manager::OsAffinityBackend;
-use k3_manager::capacity::MockOsAffinityBackend;
-use k3_manager::error::ManagerError;
-use k3_manager::runtime::{AdminCommand, ControlPlaneRuntime, ModelAuditEventType};
+use jero_manager::OsAffinityBackend;
+use jero_manager::capacity::MockOsAffinityBackend;
+use jero_manager::error::ManagerError;
+use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime, ModelAuditEventType};
 
 fn build_challenge_runtime() -> (ControlPlaneRuntime, Arc<MockOsAffinityBackend>) {
     let capacity = ControlPlaneCapacityConfig::default()

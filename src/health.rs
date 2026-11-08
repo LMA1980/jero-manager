@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use k3_core::affinity::ResolvedControlCapacity;
+use jero_core::affinity::ResolvedControlCapacity;
 
 use crate::domain::{OsAffinityBackend, RealOsAffinityBackend};
 use crate::error::ManagerError;

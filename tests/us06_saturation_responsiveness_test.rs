@@ -16,9 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_manager::domain::MockOsAffinityBackend;
-use k3_manager::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_manager::domain::MockOsAffinityBackend;
+use jero_manager::{
     AdminCommand, AdminResponse, ChatTemplate, ControlPlaneRuntime, SimpleTokenizer, SpecialTokens,
 };
 
@@ -29,7 +29,7 @@ fn setup_runtime() -> (Arc<ControlPlaneRuntime>, Arc<MockOsAffinityBackend>) {
     let mock_affinity = Arc::new(MockOsAffinityBackend::default());
     let runtime = ControlPlaneRuntime::with_affinity_backend(
         capacity,
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("runtime creation");
 

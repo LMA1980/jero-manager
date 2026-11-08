@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use k3_core::affinity::{A100_CLUSTER_MASK, X100_CLUSTER_MASK};
-pub use muobserve_ipc::{
+use jero_core::affinity::{A100_CLUSTER_MASK, X100_CLUSTER_MASK};
+pub use mu_observable_ipc::{
     DeterministicSecretRedactor, IpcError as TelemetryIpcError, IpcHeader,
     MSG_TYPE_ARROW_OTEL_METRICS, MSG_TYPE_ARROW_OTEL_SPANS, MSG_TYPE_WAL_ACK, OtelMetricEntry,
     OtelSpanEntry, TraceContext, WalBatchAck, create_fory_registry, decode_metric_batch,
@@ -447,7 +447,7 @@ impl FramedMuobBatch {
     /// Serializes the 24-byte `IpcHeader` followed by `payload` into a single contiguous frame buffer.
     #[must_use]
     pub fn to_wire_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(muobserve_ipc::HEADER_SIZE + self.payload.len());
+        let mut out = Vec::with_capacity(mu_observable_ipc::HEADER_SIZE + self.payload.len());
         out.extend_from_slice(zerocopy::IntoBytes::as_bytes(&self.header));
         out.extend_from_slice(&self.payload);
         out

@@ -26,14 +26,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::ipc::layout::KvBlockTag;
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::client::KvClient;
-use k3_manager::dispatch::ForwardPassRequest;
-use k3_manager::domain::{CgroupV2DomainController, MockOsAffinityBackend};
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
-use k3_manager::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::ipc::layout::KvBlockTag;
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::client::KvClient;
+use jero_manager::dispatch::ForwardPassRequest;
+use jero_manager::domain::{CgroupV2DomainController, MockOsAffinityBackend};
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_manager::{
     ControlPlaneRuntime, HealthSupervisor, ManagerError, RecoveryAction, RecoveryTarget,
     SimpleTokenizer,
 };
@@ -110,7 +110,7 @@ fn test_scenario2_runaway_workload_recovery_e2e() {
     let mock_affinity = Arc::new(MockOsAffinityBackend::default());
 
     let domain_ctrl = Arc::new(CgroupV2DomainController::default().with_affinity_backend(
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     ));
     let mut supervisor = WorkerSupervisor::new()
         .with_capacity(capacity.clone())
@@ -159,7 +159,7 @@ fn test_scenario2_runaway_workload_recovery_e2e() {
     let control_runtime = Arc::new(
         ControlPlaneRuntime::with_affinity_backend(
             capacity.clone(),
-            Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+            Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
         )
         .expect("create control runtime"),
     );
@@ -178,7 +178,7 @@ fn test_scenario2_runaway_workload_recovery_e2e() {
 
     let mut health_supervisor = HealthSupervisor::with_affinity_backend(
         capacity.clone(),
-        Arc::clone(&mock_affinity) as Arc<dyn k3_manager::OsAffinityBackend>,
+        Arc::clone(&mock_affinity) as Arc<dyn jero_manager::OsAffinityBackend>,
     )
     .expect("create health supervisor")
     .with_check_interval(Duration::from_millis(20))

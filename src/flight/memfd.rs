@@ -23,8 +23,8 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::K3Error;
-use k3_core::ipc::protocol::{recv_frame, send_frame};
+use jero_core::K3Error;
+use jero_core::ipc::protocol::{recv_frame, send_frame};
 
 static MEMFD_COUNTER: AtomicU64 = AtomicU64::new(1);
 

@@ -13,12 +13,14 @@
 
 use std::sync::Arc;
 
-use k3_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
-use k3_core::profile::{PriorityClass, ProfileStatus, TuningProfile};
-use k3_manager::domain::MockOsAffinityBackend;
-use k3_manager::error::ManagerError;
-use k3_manager::runtime::{AdminCommand, AdminResponse, ControlPlaneRuntime, ModelAuditEventType};
-use k3_manager::scheduler::{MultiModelScheduler, ScheduledPass};
+use jero_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
+use jero_core::profile::{PriorityClass, ProfileStatus, TuningProfile};
+use jero_manager::domain::MockOsAffinityBackend;
+use jero_manager::error::ManagerError;
+use jero_manager::runtime::{
+    AdminCommand, AdminResponse, ControlPlaneRuntime, ModelAuditEventType,
+};
+use jero_manager::scheduler::{MultiModelScheduler, ScheduledPass};
 
 fn setup_capacity() -> ResolvedControlCapacity {
     ControlPlaneCapacityConfig::default()

@@ -17,16 +17,18 @@
     clippy::too_many_lines
 )]
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_core::profile::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_core::profile::{
     CONSERVATIVE_DEFAULT_N_CTX, CONSERVATIVE_TUNING_ADVISORY, CONSTRAINED_TEST_N_CTX, ComputePool,
     ModelListResponse, PriorityClass, TuningProfile,
 };
-use k3_manager::domain::MockOsAffinityBackend;
-use k3_manager::error::ManagerError;
-use k3_manager::runtime::{AdminCommand, AdminResponse, ControlPlaneRuntime, ModelAuditEventType};
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_manager::domain::MockOsAffinityBackend;
+use jero_manager::error::ManagerError;
+use jero_manager::runtime::{
+    AdminCommand, AdminResponse, ControlPlaneRuntime, ModelAuditEventType,
+};
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

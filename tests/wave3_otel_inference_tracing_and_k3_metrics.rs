@@ -4,17 +4,17 @@
 
 use std::sync::Arc;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::{PriorityClass, ProfileStatus, TuningProfile};
-use k3_manager::domain::MockOsAffinityBackend;
-use k3_manager::protocol::types::{HttpRequest, HttpResponseBody};
-use k3_manager::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::{PriorityClass, ProfileStatus, TuningProfile};
+use jero_manager::domain::MockOsAffinityBackend;
+use jero_manager::protocol::types::{HttpRequest, HttpResponseBody};
+use jero_manager::{
     BOUNDED_MEMLOCK_CEILING_BYTES, CollectorEndpoint, ControlPlaneRuntime,
     MSG_TYPE_ARROW_OTEL_METRICS, MSG_TYPE_ARROW_OTEL_SPANS, MSG_TYPE_WAL_ACK,
     MuObserveTelemetryStreamer, ProtocolServer, ProtocolServerConfig, WalBatchAck,
     decode_metric_batch, decode_span_batch,
 };
-use muobserve_ipc::{IpcHeader, create_fory_registry, read_frame, write_frame};
+use mu_observable_ipc::{IpcHeader, create_fory_registry, read_frame, write_frame};
 use tokio::net::TcpListener;
 
 fn create_test_runtime() -> Arc<ControlPlaneRuntime> {

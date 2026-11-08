@@ -27,14 +27,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use duckdb::Connection;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::{PriorityClass, TuningProfile};
-use k3_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
-use k3_manager::error::ManagerError;
-use k3_manager::persistence::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::{PriorityClass, TuningProfile};
+use jero_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
+use jero_manager::error::ManagerError;
+use jero_manager::persistence::{
     PersistenceError, PersistenceStore, Project, SessionLastTurn, SqlitePersistenceStore, Tenant,
 };
-use k3_manager::runtime::{AdminCommand, AdminResponse, ControlPlaneRuntime};
+use jero_manager::runtime::{AdminCommand, AdminResponse, ControlPlaneRuntime};
 
 fn current_epoch() -> u64 {
     SystemTime::now()

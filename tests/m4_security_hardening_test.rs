@@ -26,20 +26,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use k3_core::K3Error;
-use k3_core::profile::TuningProfile;
-use k3_manager::ingestion::provider::resolve_secret_value;
-use k3_manager::ingestion::{
+use jero_core::K3Error;
+use jero_core::profile::TuningProfile;
+use jero_manager::ingestion::provider::resolve_secret_value;
+use jero_manager::ingestion::{
     IngestionError, LocalFileAdapter, PullRequest, SourceAdapter, SourceCredentials,
     StagingPipeline,
 };
-use k3_manager::persistence::{
+use jero_manager::persistence::{
     CasCatalog, DuckDbPersistenceStore, ModelAliasRecord, ModelBlobRecord, ModelManifestRecord,
     PersistenceStore, Project, SessionLastTurn, Tenant,
 };
-use k3_manager::protocol::ProtocolServerConfig;
-use k3_manager::queue::AdmissionQueueManager;
-use k3_manager::store::{
+use jero_manager::protocol::ProtocolServerConfig;
+use jero_manager::queue::AdmissionQueueManager;
+use jero_manager::store::{
     ContentAddressedStore, MockProcMapsScanner, ModelManifest, ProcessMappingInfo, Sha256,
     StorageGarbageCollector, validate_sha256_digest,
 };
@@ -921,7 +921,7 @@ fn test_feature30_authentic_volatile_zeroization() {
     let len = secret.len();
     assert_ne!(unsafe { *ptr }, 0);
 
-    k3_manager::ingestion::provider::volatile_zeroize_string(&mut secret);
+    jero_manager::ingestion::provider::volatile_zeroize_string(&mut secret);
 
     assert_eq!(secret.len(), 0);
     // Directly verify that all bytes in the backing buffer were overwritten with 0

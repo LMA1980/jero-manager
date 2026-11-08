@@ -9,7 +9,7 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-use k3_core::profile::PriorityClass;
+use jero_core::profile::PriorityClass;
 
 use crate::error::ManagerError;
 

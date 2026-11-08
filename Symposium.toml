@@ -1,14 +1,14 @@
-name = "k3-manager"
-# Crate-embedded Symposium manifest for k3-manager.
+name = "jero-manager"
+# Crate-embedded Symposium manifest for jero-manager.
 
 [[plugins]]
-depends-on = ["k3-core"]
-source.cargo = "k3-core"
+depends-on = ["jero-core"]
+source.cargo = "jero-core"
 
 [[plugins]]
-depends-on = ["k3-tokenizer"]
-source.cargo = "k3-tokenizer"
+depends-on = ["jero-tokenizer"]
+source.cargo = "jero-tokenizer"
 
 [[plugins]]
-depends-on = ["muobserve-ipc"]
-source.cargo = "muobserve-ipc"
+depends-on = ["mu-observable-ipc"]
+source.cargo = "mu-observable-ipc"

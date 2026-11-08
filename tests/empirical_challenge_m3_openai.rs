@@ -25,17 +25,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::{ComputePool, PriorityClass, TuningProfile};
-use k3_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
-use k3_manager::protocol::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::{ComputePool, PriorityClass, TuningProfile};
+use jero_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
+use jero_manager::protocol::{
     DEFAULT_MAX_REQUEST_BODY_BYTES, HttpRequest, HttpResponseBody, MAX_REQUEST_HEADERS_BYTES,
     OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiErrorResponse, OpenAiFunction,
     OpenAiFunctionCall, OpenAiMessage, OpenAiTool, OpenAiToolCall, ProtocolServer,
     ProtocolServerConfig, ServerError,
 };
-use k3_manager::queue::AdmissionQueueConfig;
-use k3_manager::runtime::{AdminCommand, ControlPlaneRuntime};
+use jero_manager::queue::AdmissionQueueConfig;
+use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Constructs an isolated in-memory test runtime.
@@ -239,7 +239,7 @@ async fn test_challenge_flexible_message_content_structures() {
         messages: vec![
             OpenAiMessage {
                 role: "system".to_owned(),
-                content: Some(k3_manager::protocol::MessageContent::Parts(vec![
+                content: Some(jero_manager::protocol::MessageContent::Parts(vec![
                     serde_json::json!({"type": "text", "text": "System part 1. "}),
                     serde_json::json!({"type": "text", "text": "System part 2."}),
                 ])),

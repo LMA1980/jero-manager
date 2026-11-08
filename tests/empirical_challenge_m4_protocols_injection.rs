@@ -20,20 +20,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::TuningProfile;
-use k3_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
-use k3_manager::ingestion::provider::resolve_secret_value;
-use k3_manager::ingestion::{IngestionError, SourceCredentials};
-use k3_manager::persistence::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::TuningProfile;
+use jero_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
+use jero_manager::ingestion::provider::resolve_secret_value;
+use jero_manager::ingestion::{IngestionError, SourceCredentials};
+use jero_manager::persistence::{
     BlobReferenceRecord, CasCatalog, DerivedBlobRecord, DuckDbPersistenceStore, ModelAliasRecord,
     ModelBlobRecord, ModelManifestRecord, PersistenceStore, Project, SessionLastTurn, Tenant,
 };
-use k3_manager::protocol::{
+use jero_manager::protocol::{
     ClaudeAdapter, DEFAULT_MAX_REQUEST_BODY_BYTES, HttpRequest, HttpResponseBody,
     MAX_REQUEST_HEADERS_BYTES, OpenAiAdapter, ProtocolServer, ProtocolServerConfig, ServerError,
 };
-use k3_manager::runtime::{AdminCommand, ControlPlaneRuntime};
+use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 static TEST_SEQ: AtomicU64 = AtomicU64::new(8000);

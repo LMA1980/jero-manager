@@ -1,11 +1,11 @@
 [package]
-name = "k3-manager"
+name = "jero-manager"
 description = "Control plane and IPC daemon for the SpacemiT K3 AI platform"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
-repository = "https://github.com/LMA1980/k3-manager"
+repository = "https://github.com/LMA1980/jero-manager"
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -19,11 +19,11 @@ pedantic = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"
 
 [dependencies]
-k3-arch-mistral = { version = "0.1.0", git = "https://github.com/LMA1980/k3-arch-mistral.git", branch = "feat/m4-epic2-bitnet-tq1-tq2", default-features = false }
-k3-core = { version = "0.1.0", git = "https://github.com/LMA1980/k3-core.git", branch = "feat/m4-epic2-bitnet-tq1-tq2" }
-k3-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/k3-tokenizer.git", branch = "feat/m4-epic2-bitnet-tq1-tq2" }
-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/k3-kernels-rvv.git", branch = "feat/m4-epic2-bitnet-tq1-tq2" }
-muobserve-ipc = { version = "0.1.0", git = "https://github.com/LMA1980/MuObserve-ipc.git" }
+jero-arch-mistral = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-mistral.git", branch = "feat/m8-naming-alignment", default-features = false }
+jero-core = { version = "0.1.0", git = "https://github.com/LMA1980/jero-core.git", branch = "feat/m8-naming-alignment" }
+jero-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/jero-tokenizer.git", branch = "feat/m8-naming-alignment" }
+jero-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kernels-rvv.git", branch = "feat/m8-naming-alignment" }
+mu-observable-ipc = { version = "0.1.0", git = "https://github.com/LMA1980/mu-observable-ipc.git", branch = "feat/m8-naming-alignment" }
 arrow-array = "59.3.1"
 arrow-buffer = "59.3.1"
 arrow-schema = "59.3.1"
@@ -35,6 +35,5 @@ serde_json = "1.0"
 zerocopy = { version = "0.8.63", features = ["derive"] }
 duckdb = { version = "=1.2.2", default-features = false }
 
-
 [dev-dependencies]
-k3-kv = { version = "0.1.0", git = "https://github.com/LMA1980/k3-kv.git", branch = "feat/m4-epic2-bitnet-tq1-tq2" }
+jero-kv-cache = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kv-cache.git", branch = "feat/m8-naming-alignment" }

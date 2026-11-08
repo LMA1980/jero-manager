@@ -26,19 +26,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use k3_core::K3Error;
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_core::profile::{CONSERVATIVE_TUNING_ADVISORY, ComputePool, PriorityClass, TuningProfile};
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::OsAffinityBackend;
-use k3_manager::capacity::MockOsAffinityBackend;
-use k3_manager::client::KvClient;
-use k3_manager::domain::CgroupV2DomainController;
-use k3_manager::error::ManagerError;
-use k3_manager::prompt::{SimpleTokenizer, validate_and_tokenize};
-use k3_manager::runtime::{AdminCommand, ControlPlaneRuntime};
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_core::K3Error;
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_core::profile::{CONSERVATIVE_TUNING_ADVISORY, ComputePool, PriorityClass, TuningProfile};
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::OsAffinityBackend;
+use jero_manager::capacity::MockOsAffinityBackend;
+use jero_manager::client::KvClient;
+use jero_manager::domain::CgroupV2DomainController;
+use jero_manager::error::ManagerError;
+use jero_manager::prompt::{SimpleTokenizer, validate_and_tokenize};
+use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime};
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(50_000);
 

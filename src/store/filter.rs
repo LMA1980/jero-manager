@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
-use k3_core::K3Error;
-use k3_tokenizer::{ChatTemplate, SpecialTokens, Tokenizer};
+use jero_core::K3Error;
+use jero_tokenizer::{ChatTemplate, SpecialTokens, Tokenizer};
 
 use super::cas::ModelManifest;
 
@@ -198,6 +198,33 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
+    // 8. NVIDIA Nemotron-Labs Dory1.0 looped latent-recurrent nGPT recipe ("dory")
+    let dory_template = ChatTemplate::new(Some(
+        "<s><|im_start|>user\n{{prompt}}<|im_end|>\n<|im_start|>assistant\n<think>\n".to_owned(),
+    ));
+    let dory_stop = SpecialTokens {
+        bos_token_id: Some(1),
+        eos_token_id: Some(2),
+        eot_token_id: Some(2),
+        stop_tokens: vec![2],
+        stop_sequences: vec!["<|im_end|>".to_owned()],
+        ..Default::default()
+    };
+
+    map.insert(
+        "dory@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "dory",
+            recipe_version: "1.0.0",
+            supported_quants: &[
+                "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+            ],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(dory_template),
+            special_tokens: Some(dory_stop),
+        },
+    );
+
     RwLock::new(map)
 });
 
@@ -323,9 +350,9 @@ impl CapabilityFilter {
                         reason: Some("model context length must be greater than 0".to_owned()),
                     }
                 } else if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-                    if let Err(err) = k3_arch_mistral::evaluate_moe_memlock_admission(
+                    if let Err(err) = jero_arch_mistral::evaluate_moe_memlock_admission(
                         manifest,
-                        k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
+                        jero_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
                     ) {
                         CandidateSuitability {
                             executable: false,
@@ -334,7 +361,7 @@ impl CapabilityFilter {
                             quantization_supported: true,
                             reason: Some(format!(
                                 "{err}: {}",
-                                k3_arch_mistral::COMPACT_MOE_ADVISORY
+                                jero_arch_mistral::COMPACT_MOE_ADVISORY
                             )),
                         }
                     } else {
@@ -431,9 +458,9 @@ impl CapabilityFilter {
 
         // MoE memlock admission check for Mixtral
         if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-            k3_arch_mistral::evaluate_moe_memlock_admission(
+            jero_arch_mistral::evaluate_moe_memlock_admission(
                 manifest,
-                k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
+                jero_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
             )?;
         }
 

@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use k3_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
-use k3_manager::store::{
+use jero_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
+use jero_manager::store::{
     ContentAddressedStore, MockProcMapsScanner, ModelManifest, ProcessMappingInfo,
     ProcessMapsScanner, Sha256, StorageGarbageCollector,
 };

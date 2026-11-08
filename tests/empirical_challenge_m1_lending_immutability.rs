@@ -21,13 +21,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use k3_core::affinity::{
+use jero_core::affinity::{
     ControlPlaneCapacityConfig, DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_SPARE_RECOVERY_MASK,
     ResolvedControlCapacity,
 };
-use k3_core::profile::{CostProfile, PriorityClass, ProfileStatus, TuningProfile};
-use k3_manager::error::ManagerError;
-use k3_manager::scheduler::{MultiModelScheduler, ScheduledPass};
+use jero_core::profile::{CostProfile, PriorityClass, ProfileStatus, TuningProfile};
+use jero_manager::error::ManagerError;
+use jero_manager::scheduler::{MultiModelScheduler, ScheduledPass};
 
 fn setup_capacity() -> ResolvedControlCapacity {
     ControlPlaneCapacityConfig::default()
@@ -812,7 +812,7 @@ fn test_challenge3b_advisory_recommendations_immutability_and_tradeoffs() {
         scheduler.record_pass_completion(&pass, 400.0, 10.0, 64);
     }
 
-    let mut baseline = CostProfile::unprofiled_default(k3_core::profile::ModelIdentity {
+    let mut baseline = CostProfile::unprofiled_default(jero_core::profile::ModelIdentity {
         name: "test-model".to_owned(),
         architecture: "llama".to_owned(),
         file_path: "/models/test.gguf".to_owned(),

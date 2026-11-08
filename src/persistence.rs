@@ -16,7 +16,7 @@ pub use duckdb::OptionalExt as OptionalExtension;
 use duckdb::{Connection, params};
 use serde::{Deserialize, Serialize};
 
-use k3_core::profile::TuningProfile;
+use jero_core::profile::TuningProfile;
 
 /// Error conditions encountered during persistence operations.
 #[derive(Debug)]

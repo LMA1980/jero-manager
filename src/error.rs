@@ -3,9 +3,9 @@
 use std::fmt;
 use std::io;
 
-use k3_core::K3Error;
-use k3_core::ipc::protocol::StatusCode;
-use k3_core::ipc::shm::IpcError;
+use jero_core::K3Error;
+use jero_core::ipc::protocol::StatusCode;
+use jero_core::ipc::shm::IpcError;
 
 /// Error type encompassing control plane, KV client, worker supervisor, and dispatch failures.
 #[derive(Debug)]

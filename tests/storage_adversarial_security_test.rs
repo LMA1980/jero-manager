@@ -22,13 +22,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use k3_core::K3Error;
-use k3_core::profile::TuningProfile;
-use k3_manager::persistence::{
+use jero_core::K3Error;
+use jero_core::profile::TuningProfile;
+use jero_manager::persistence::{
     CasCatalog, DuckDbPersistenceStore, ModelAliasRecord, ModelBlobRecord, ModelManifestRecord,
     PersistenceStore, Project, SessionLastTurn, Tenant,
 };
-use k3_manager::store::{
+use jero_manager::store::{
     ContentAddressedStore, ModelManifest, Sha256, parse_alias_id, validate_path_component,
     validate_sha256_digest,
 };

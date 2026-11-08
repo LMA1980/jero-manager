@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::error::K3Error;
+use jero_core::error::K3Error;
 
 use crate::protocol::types::{
     HttpRequest, HttpResponse, MessageContent, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,

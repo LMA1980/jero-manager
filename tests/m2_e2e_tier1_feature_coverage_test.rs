@@ -77,24 +77,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use k3_core::K3Error;
-use k3_core::affinity::{DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_X100_COMPUTE_CAP_MASK};
-use k3_core::ipc::layout::{ArenaHeader, KvBlockMeta, TAG_FREE, TAG_PERSIST, TAG_VOLATILE};
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_core::profile::{
+use jero_core::K3Error;
+use jero_core::affinity::{DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_X100_COMPUTE_CAP_MASK};
+use jero_core::ipc::layout::{ArenaHeader, KvBlockMeta, TAG_FREE, TAG_PERSIST, TAG_VOLATILE};
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_core::profile::{
     CONSTRAINED_TEST_N_CTX, ComputePool, PriorityClass, ProfileStatus, TuningProfile,
 };
-use k3_manager::persistence::{
+use jero_manager::persistence::{
     PersistenceStore, Project, SessionLastTurn, SqlitePersistenceStore, Tenant,
 };
-use k3_manager::prefix::PrefixRadixIndex;
-use k3_manager::prompt::validate_and_tokenize;
-use k3_manager::queue::{AdmissionQueueConfig, ModelAdmissionQueue, QueueSseFrame};
-use k3_manager::router::{
+use jero_manager::prefix::PrefixRadixIndex;
+use jero_manager::prompt::validate_and_tokenize;
+use jero_manager::queue::{AdmissionQueueConfig, ModelAdmissionQueue, QueueSseFrame};
+use jero_manager::router::{
     DecisionRouter, ModelCapability, ModelTarget, RouterConfig, RoutingRequest,
 };
-use k3_manager::session::SessionRegistry;
-use k3_tokenizer::SimpleTokenizer;
+use jero_manager::session::SessionRegistry;
+use jero_tokenizer::SimpleTokenizer;
 
 // ============================================================================
 // 1. US-08: Operator Tuning Authority (Features 1-3) — Tier 1 (5 tests)
@@ -301,7 +301,7 @@ fn test_tier1_us09_atomic_forward_pass_no_midpass_preemption() {
 #[test]
 fn test_tier1_us09_single_prompt_exclusivity_tail_underfill() {
     let prompt_tokens = 43_usize;
-    let block_size = k3_manager::prefix::BLOCK_SIZE_TOKENS; // 16
+    let block_size = jero_manager::prefix::BLOCK_SIZE_TOKENS; // 16
 
     let full_blocks = prompt_tokens / block_size;
     let tail_tokens = prompt_tokens % block_size;
@@ -753,7 +753,7 @@ fn test_tier1_us14_upfront_refusal_preserves_active_models() {
 fn test_tier1_us14_dedicated_memfd_per_model_isolation() {
     // Model A arena header vs Model B arena header
     let header_a = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 1024 * 1024,
         block_count: 64,
@@ -762,7 +762,7 @@ fn test_tier1_us14_dedicated_memfd_per_model_isolation() {
     };
 
     let header_b = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 2048 * 1024,
         block_count: 128,
@@ -780,7 +780,7 @@ fn test_tier1_us14_intra_arena_lru_block_eviction() {
     let mut arena =
         SharedMemoryArena::create("tier1-eviction-shm", 1024 * 1024).expect("create arena");
     let hdr = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 1024 * 1024,
         block_count: 3,
@@ -936,7 +936,7 @@ fn test_tier1_us15_16_token_block_alignment_exact_and_suffix() {
 #[test]
 fn test_tier1_us16_kv_holder_persistence_across_worker_crash() {
     let mut arena_header = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 1024 * 1024,
         block_count: 64,
