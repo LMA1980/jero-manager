@@ -35,6 +35,5 @@ serde_json = "1.0"
 zerocopy = { version = "0.8.63", features = ["derive"] }
 duckdb = { version = "=1.2.2", default-features = false }
 
-
 [dev-dependencies]
 jero-kv-cache = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kv-cache.git", branch = "feat/m8-naming-alignment" }
