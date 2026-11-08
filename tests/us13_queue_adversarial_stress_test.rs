@@ -16,8 +16,8 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use k3_core::error::K3Error;
-use k3_manager::queue::{
+use jero_core::error::K3Error;
+use jero_manager::queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_MAX_QUEUE_DEPTH, ModelAdmissionQueue,
     QueueSseFrame,
 };

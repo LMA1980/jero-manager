@@ -36,10 +36,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::{RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
-use k3_manager::flight::{
+use jero_manager::flight::{
     FlightError, FlightReceiver, FlightStream, FlightTensorBatchStreamer, MemfdArena,
 };
-use k3_manager::ingestion::{
+use jero_manager::ingestion::{
     GgufHeaderPrefix, HuggingFaceAdapter, ModelFormat, PullRequest, SafeTensorsHeaderPrefix,
     SourceAdapter, SourceCredentials, StagingPipeline,
 };

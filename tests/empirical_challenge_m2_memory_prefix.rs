@@ -31,16 +31,16 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-use k3_core::error::K3Error;
-use k3_core::ipc::layout::{
+use jero_core::error::K3Error;
+use jero_core::ipc::layout::{
     ArenaHeader, KvBlockMeta, KvBlockTag, TAG_FREE, TAG_PERSIST, TAG_PURGE, TAG_VOLATILE,
 };
-use k3_core::ipc::protocol::StatusCode;
-use k3_core::ipc::shm::DEFAULT_LIMIT_MEMLOCK_BYTES;
-use k3_kv::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
-use k3_manager::prefix::{PrefixKey, PrefixRadixIndex};
-use k3_manager::prompt::validate_and_tokenize;
-use k3_tokenizer::SimpleTokenizer;
+use jero_core::ipc::protocol::StatusCode;
+use jero_core::ipc::shm::DEFAULT_LIMIT_MEMLOCK_BYTES;
+use jero_kv_cache::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
+use jero_manager::prefix::{PrefixKey, PrefixRadixIndex};
+use jero_manager::prompt::validate_and_tokenize;
+use jero_tokenizer::SimpleTokenizer;
 
 // ============================================================================
 // Helpers
@@ -125,13 +125,13 @@ fn test_empirical_load_time_memory_admission_refusal_status_11() {
 
     // 5. Invariant: Both running models Alpha and Beta remain 100% uncorrupted and operational
     let surviving_hdr_a = arena_a.header().expect("read header a after refusal");
-    assert_eq!(surviving_hdr_a.magic, k3_core::ipc::layout::ARENA_MAGIC);
+    assert_eq!(surviving_hdr_a.magic, jero_core::ipc::layout::ARENA_MAGIC);
     assert_eq!(surviving_hdr_a.n_ctx, n_ctx_a);
     assert_eq!(surviving_hdr_a.block_count, layout_a.block_count);
     assert_eq!(surviving_hdr_a.validate(), Ok(()));
 
     let surviving_hdr_b = arena_b.header().expect("read header b after refusal");
-    assert_eq!(surviving_hdr_b.magic, k3_core::ipc::layout::ARENA_MAGIC);
+    assert_eq!(surviving_hdr_b.magic, jero_core::ipc::layout::ARENA_MAGIC);
     assert_eq!(surviving_hdr_b.n_ctx, n_ctx_b);
     assert_eq!(surviving_hdr_b.active_slots, 2);
     assert_eq!(surviving_hdr_b.block_count, layout_b.block_count);
@@ -159,7 +159,7 @@ fn test_empirical_load_time_memory_admission_refusal_status_11() {
 #[test]
 fn test_empirical_intra_arena_lru_eviction_and_zero_cross_arena_leakage() {
     let header_model_a = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 512 * 1024,
         block_count: 8,
@@ -169,7 +169,7 @@ fn test_empirical_intra_arena_lru_eviction_and_zero_cross_arena_leakage() {
     assert_eq!(header_model_a.validate(), Ok(()));
 
     let header_model_b = ArenaHeader {
-        magic: k3_core::ipc::layout::ARENA_MAGIC,
+        magic: jero_core::ipc::layout::ARENA_MAGIC,
         version: 1,
         total_bytes: 1024 * 1024,
         block_count: 8,

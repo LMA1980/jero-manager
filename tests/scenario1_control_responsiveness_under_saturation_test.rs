@@ -24,13 +24,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::client::KvClient;
-use k3_manager::dispatch::ForwardPassRequest;
-use k3_manager::domain::{CgroupV2DomainController, MockOsAffinityBackend};
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
-use k3_manager::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::client::KvClient;
+use jero_manager::dispatch::ForwardPassRequest;
+use jero_manager::domain::{CgroupV2DomainController, MockOsAffinityBackend};
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_manager::{
     AdminCommand, AdminResponse, ChatTemplate, ControlPlaneRuntime, OsAffinityBackend,
     SimpleTokenizer, SpecialTokens,
 };

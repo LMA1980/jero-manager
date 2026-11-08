@@ -44,19 +44,19 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::TryRecvError;
 use zerocopy::FromBytes;
 
-use k3_core::ipc::layout::{
+use jero_core::ipc::layout::{
     ARENA_MAGIC, ARENA_VERSION, ArenaHeader, BLOCK_SIZE_TOKENS, KvBlockTag, OutputSlabHeader,
     SLAB_STATUS_WRITTEN,
 };
-use k3_core::ipc::protocol::{
+use jero_core::ipc::protocol::{
     ForwardPassCommand, ForwardPassCompleted, IpcMessage, StatusCode, recv_msg_frame,
     send_msg_frame,
 };
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_manager::dispatch::ForwardPassRequest;
-use k3_manager::error::ManagerError;
-use k3_manager::session::{DEFAULT_RETENTION_WINDOW, SessionError, SessionRegistry};
-use k3_manager::supervisor::{ManagedWorker, WorkerPlacement, WorkerSupervisor};
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_manager::dispatch::ForwardPassRequest;
+use jero_manager::error::ManagerError;
+use jero_manager::session::{DEFAULT_RETENTION_WINDOW, SessionError, SessionRegistry};
+use jero_manager::supervisor::{ManagedWorker, WorkerPlacement, WorkerSupervisor};
 
 fn init_test_arena(name: &str, block_count: u32) -> SharedMemoryArena {
     let mut arena = SharedMemoryArena::create(name, 128 * 1024).expect("create arena");

@@ -20,9 +20,9 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use k3_core::ipc::layout::KvBlockMeta;
-use k3_core::profile::{CONSTRAINED_TEST_N_CTX, PriorityClass, TuningProfile};
-use k3_manager::prefix::PrefixRadixIndex;
+use jero_core::ipc::layout::KvBlockMeta;
+use jero_core::profile::{CONSTRAINED_TEST_N_CTX, PriorityClass, TuningProfile};
+use jero_manager::prefix::PrefixRadixIndex;
 
 // ============================================================================
 // Scenario 1: Multi-Tenant Developer Workstation (IDE Code Completion)

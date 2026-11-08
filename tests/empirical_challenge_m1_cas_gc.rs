@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use k3_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
-use k3_manager::store::{
+use jero_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
+use jero_manager::store::{
     ContentAddressedStore, DerivedBlobManager, MockProcMapsScanner, ModelManifest,
     ProcessMappingInfo, ProcessMapsScanner, RetentionPolicy, Sha256, StorageGarbageCollector,
     parse_alias_id, validate_path_component,

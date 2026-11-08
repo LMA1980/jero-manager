@@ -1,5 +1,5 @@
 version: "3"
-name: "k3-manager declarative pipeline: Hygiene, Build, Test, Coverage, Miri & Benchmarks"
+name: "jero-manager declarative pipeline: Hygiene, Build, Test, Coverage, Miri & Benchmarks"
 
 env:
   CARGO_TERM_COLOR: "always"

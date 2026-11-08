@@ -16,16 +16,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::capacity::ResolvedControlCapacityExt;
-use k3_core::affinity::{
+use jero_core::affinity::{
     ControlPlaneCapacityConfig, DEFAULT_X100_MAX_COMPUTE_CORES, ResolvedControlCapacity,
 };
-use k3_core::ipc::layout::{ArenaHeader, KvBlockMeta, KvBlockTag};
-use k3_core::ipc::protocol::{
+use jero_core::ipc::layout::{ArenaHeader, KvBlockMeta, KvBlockTag};
+use jero_core::ipc::protocol::{
     AttachArenaCommand, IpcMessage, StatusCode, WorkerHeartbeatRequest, WorkerHeartbeatResponse,
     recv_frame, recv_msg_frame, send_msg_frame,
 };
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_core::profile::TuningProfile;
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_core::profile::TuningProfile;
 
 use crate::dispatch::{ForwardPassRequest, ForwardPassResult, dispatch_forward_pass};
 use crate::domain::{
@@ -39,14 +39,18 @@ use crate::error::ManagerError;
 /// # Errors
 /// Returns [`ManagerError::WorkerSpawn`] if binary cannot be located.
 pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
-    if let Ok(env_bin) = std::env::var("K3_WORKER_BIN") {
+    if let Ok(env_bin) =
+        std::env::var("JERO_WORKER_BIN").or_else(|_| std::env::var("K3_WORKER_BIN"))
+    {
         let p = PathBuf::from(env_bin);
         if p.exists() {
             return Ok(p);
         }
     }
 
-    if let Some(bin) = option_env!("CARGO_BIN_EXE_k3-worker") {
+    if let Some(bin) =
+        option_env!("CARGO_BIN_EXE_jero-worker").or(option_env!("CARGO_BIN_EXE_k3-worker"))
+    {
         let p = PathBuf::from(bin);
         if p.exists() {
             return Ok(p);
@@ -55,18 +59,32 @@ pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
 
     if let Ok(curr) = std::env::current_exe() {
         if let Some(dir) = curr.parent() {
-            let candidate = dir.join("k3-worker");
+            let candidate = dir.join("jero-worker");
             if candidate.exists() {
                 return Ok(candidate);
             }
-            let candidate_parent = dir.join("../k3-worker");
+            let candidate_fallback = dir.join("k3-worker");
+            if candidate_fallback.exists() {
+                return Ok(candidate_fallback);
+            }
+            let candidate_parent = dir.join("../jero-worker");
             if candidate_parent.exists() {
                 return Ok(candidate_parent);
+            }
+            let candidate_parent_fallback = dir.join("../k3-worker");
+            if candidate_parent_fallback.exists() {
+                return Ok(candidate_parent_fallback);
             }
         }
     }
 
     for path in &[
+        "target/debug/jero-worker",
+        "target/release/jero-worker",
+        "../target/debug/jero-worker",
+        "../target/release/jero-worker",
+        "../../target/debug/jero-worker",
+        "../../target/release/jero-worker",
         "target/debug/k3-worker",
         "target/release/k3-worker",
         "../target/debug/k3-worker",
@@ -82,7 +100,7 @@ pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
         }
     }
 
-    Ok(PathBuf::from("k3-worker"))
+    Ok(PathBuf::from("jero-worker"))
 }
 
 /// Default socket timeout for compute worker heartbeat requests (500ms).
@@ -612,7 +630,7 @@ impl ManagedWorker {
     pub fn shutdown(&mut self, graceful: bool) -> Result<(), ManagerError> {
         if graceful {
             if let Some(stream) = &self.stream {
-                let cmd = IpcMessage::ShutdownCommand(k3_core::ipc::protocol::ShutdownCommand {
+                let cmd = IpcMessage::ShutdownCommand(jero_core::ipc::protocol::ShutdownCommand {
                     graceful: true,
                 });
                 let _ = send_msg_frame(stream, &cmd, None);
@@ -1313,7 +1331,7 @@ impl WorkerSupervisor {
         if is_unprofiled {
             // Unprofiled models must reside on X100 only (a100_cores == 0 per ADR-028)
             if !placement.cluster.eq_ignore_ascii_case("x100") {
-                return Err(ManagerError::Affinity(k3_core::K3Error::AffinityError {
+                return Err(ManagerError::Affinity(jero_core::K3Error::AffinityError {
                     requested_mask: compute_mask,
                     requested_threads: placement.threads.unwrap_or(0) as usize,
                     reason: format!(
@@ -1326,7 +1344,7 @@ impl WorkerSupervisor {
             // Unprofiled models cannot enable dynamic idle core lending or borrowing (ADR-030) or allocate A100 cores
             if let Some(ref t) = placement.tuning {
                 if t.a100_cores > 0 {
-                    return Err(ManagerError::Affinity(k3_core::K3Error::AffinityError {
+                    return Err(ManagerError::Affinity(jero_core::K3Error::AffinityError {
                         requested_mask: compute_mask,
                         requested_threads: placement.threads.unwrap_or(0) as usize,
                         reason: format!(
@@ -1618,7 +1636,7 @@ impl Drop for WorkerSupervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k3_core::profile::PriorityClass;
+    use jero_core::profile::PriorityClass;
 
     #[test]
     fn test_worker_placement_unprofiled_constructor() {

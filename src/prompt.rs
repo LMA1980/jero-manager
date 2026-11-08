@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use k3_core::K3Error;
-pub use k3_tokenizer::{
+use jero_core::K3Error;
+pub use jero_tokenizer::{
     ChatTemplate, DORY_BOS_TOKEN, DORY_EOS_TOKEN, DORY_MEDIUM_REASONING_SUFFIX, DetokenizeStep,
     GgufTokenizer, SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
     format_dory_chatml_prompt,

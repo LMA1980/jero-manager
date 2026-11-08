@@ -22,14 +22,14 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use k3_core::ipc::layout::{OutputSlabHeader, SLAB_STATUS_IDLE, SLAB_STATUS_WRITTEN};
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::client::KvClient;
-use k3_manager::dispatch::{
+use jero_core::ipc::layout::{OutputSlabHeader, SLAB_STATUS_IDLE, SLAB_STATUS_WRITTEN};
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::client::KvClient;
+use jero_manager::dispatch::{
     ForwardPassRequest, dispatch_forward_pass, wrap_logits_as_float32_array,
 };
-use k3_manager::error::ManagerError;
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_manager::error::ManagerError;
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 use zerocopy::FromBytes;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(500);
@@ -353,7 +353,7 @@ fn test_adversarial_unwritten_output_slab_rejection() {
     let (s_mgr, s_mock_worker) = std::os::unix::net::UnixStream::pair().expect("unix pair");
 
     std::thread::spawn(move || {
-        use k3_core::ipc::protocol::{
+        use jero_core::ipc::protocol::{
             ForwardPassCompleted, IpcMessage, StatusCode, recv_msg_frame, send_msg_frame,
         };
         if let Ok((IpcMessage::ForwardPassCommand(cmd), _)) = recv_msg_frame(&s_mock_worker) {

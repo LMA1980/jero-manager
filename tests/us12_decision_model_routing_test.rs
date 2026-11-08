@@ -6,9 +6,9 @@
 //! - Scenario 3: Fallback models and structured `RoutingUnavailable` diagnostics when routers or models are unavailable.
 //! - Confidence-based fallback escalation chains across specialist tiers.
 
-use k3_core::profile::PriorityClass;
-use k3_manager::error::ManagerError;
-use k3_manager::router::{
+use jero_core::profile::PriorityClass;
+use jero_manager::error::ManagerError;
+use jero_manager::router::{
     DecisionRouter, ExecutionAssessment, ModelCapability, ModelTarget, RouterConfig,
     RoutingRequest, StructuralConstraint,
 };

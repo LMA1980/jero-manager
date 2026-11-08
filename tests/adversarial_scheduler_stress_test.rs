@@ -13,10 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use k3_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
-use k3_core::profile::{PriorityClass, TuningProfile};
-use k3_manager::error::ManagerError;
-use k3_manager::scheduler::MultiModelScheduler;
+use jero_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
+use jero_core::profile::{PriorityClass, TuningProfile};
+use jero_manager::error::ManagerError;
+use jero_manager::scheduler::MultiModelScheduler;
 
 fn setup_capacity() -> ResolvedControlCapacity {
     ControlPlaneCapacityConfig::default()

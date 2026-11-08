@@ -25,23 +25,23 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use k3_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
-use k3_core::error::K3Error;
-use k3_core::profile::{PriorityClass, TuningProfile};
-use k3_manager::error::ManagerError;
-use k3_manager::persistence::{
+use jero_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
+use jero_core::error::K3Error;
+use jero_core::profile::{PriorityClass, TuningProfile};
+use jero_manager::error::ManagerError;
+use jero_manager::persistence::{
     DuckDbPersistenceStore, PersistenceError, PersistenceStore, Project, SessionLastTurn,
     SqlitePersistenceStore, Tenant,
 };
-use k3_manager::queue::{
+use jero_manager::queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_MAX_QUEUE_DEPTH, ModelAdmissionQueue,
     QueueSseFrame,
 };
-use k3_manager::router::{
+use jero_manager::router::{
     DecisionRouter, ExecutionAssessment, ModelCapability, ModelTarget, RouterConfig,
     RoutingRequest, StructuralConstraint,
 };
-use k3_manager::scheduler::{MultiModelScheduler, ScheduledPass};
+use jero_manager::scheduler::{MultiModelScheduler, ScheduledPass};
 
 const CONSTRAINED_N_CTX: usize = 64;
 

@@ -27,10 +27,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use k3_core::K3Error;
-use k3_core::ipc::layout::{KvBlockMeta, TAG_FREE, TAG_VOLATILE};
-use k3_core::profile::{CONSTRAINED_TEST_N_CTX, PriorityClass, ProfileStatus, TuningProfile};
-use k3_manager::prefix::PrefixRadixIndex;
+use jero_core::K3Error;
+use jero_core::ipc::layout::{KvBlockMeta, TAG_FREE, TAG_VOLATILE};
+use jero_core::profile::{CONSTRAINED_TEST_N_CTX, PriorityClass, ProfileStatus, TuningProfile};
+use jero_manager::prefix::PrefixRadixIndex;
 
 // ============================================================================
 // 1. US-08 x US-10: Operator Tuning Authority & Priority Preemption

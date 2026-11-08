@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::{K3Error, QuantType, TensorView};
-use kernels_rvv::ime::{TILE_K, pack_tiles};
+use jero_core::{K3Error, QuantType, TensorView};
+use jero_kernels_rvv::ime::{TILE_K, pack_tiles};
 use serde::{Deserialize, Serialize};
 
 use super::cas::ContentAddressedStore;

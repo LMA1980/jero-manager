@@ -22,7 +22,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 
 use arrow_array::{Array, BinaryArray};
-use k3_manager::flight::{
+use jero_manager::flight::{
     FlightError, FlightReceiver, FlightStream, FlightTensorBatchStreamer, IME_TILE_ELEMENTS,
     MemfdArena,
 };

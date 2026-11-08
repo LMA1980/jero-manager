@@ -25,9 +25,9 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use k3_core::K3Error;
-use k3_manager::persistence::{CasCatalog, DuckDbPersistenceStore, ModelBlobRecord};
-use k3_manager::store::{
+use jero_core::K3Error;
+use jero_manager::persistence::{CasCatalog, DuckDbPersistenceStore, ModelBlobRecord};
+use jero_manager::store::{
     ContentAddressedStore, MockProcMapsScanner, ProcessMappingInfo, ProcessMapsScanner, Sha256,
     StorageGarbageCollector,
 };
@@ -634,7 +634,7 @@ fn test_who_uses_multiple_referencing_manifests_and_aliases() {
 
     // Create 3 manifests referencing this same digest
     for i in 1..=3 {
-        let manifest = k3_manager::store::ModelManifest {
+        let manifest = jero_manager::store::ModelManifest {
             schema_version: 1,
             format: "raw".to_owned(),
             architecture_id: "synthetic".to_owned(),

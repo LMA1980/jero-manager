@@ -34,14 +34,14 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-use k3_core::ipc::layout::{
+use jero_core::ipc::layout::{
     ARENA_MAGIC, ArenaHeader, KvBlockMeta, KvBlockTag, TAG_FREE, TAG_PERSIST, TAG_PURGE,
     TAG_VOLATILE,
 };
-use k3_core::ipc::protocol::StatusCode;
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_kv::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
-use k3_manager::prefix::{PrefixKey, PrefixRadixIndex};
+use jero_core::ipc::protocol::StatusCode;
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_kv_cache::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
+use jero_manager::prefix::{PrefixKey, PrefixRadixIndex};
 
 fn make_tokens(count: usize, base: u32) -> Vec<u32> {
     (0..count).map(|i| base + i as u32).collect()

@@ -23,9 +23,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-use k3_manager::error::ManagerError;
-use k3_manager::supervisor::WorkerPlacement;
-use k3_manager::{
+use jero_manager::error::ManagerError;
+use jero_manager::supervisor::WorkerPlacement;
+use jero_manager::{
     A100_CLUSTER_MASK, ControlPlaneCapacityConfig, ControlPlaneScheduler,
     DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_SPARE_RECOVERY_MASK, DEFAULT_X100_COMPUTE_CAP_MASK,
     ResolvedControlCapacityExt, X100_CLUSTER_MASK,

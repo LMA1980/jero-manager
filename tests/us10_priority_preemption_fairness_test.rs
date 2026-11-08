@@ -18,9 +18,9 @@
 
 use std::sync::Arc;
 
-use k3_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
-use k3_core::profile::{PriorityClass, TuningProfile};
-use k3_manager::scheduler::MultiModelScheduler;
+use jero_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
+use jero_core::profile::{PriorityClass, TuningProfile};
+use jero_manager::scheduler::MultiModelScheduler;
 
 fn setup_capacity() -> ResolvedControlCapacity {
     ControlPlaneCapacityConfig::default()

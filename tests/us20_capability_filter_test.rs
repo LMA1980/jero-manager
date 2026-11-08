@@ -5,9 +5,9 @@
 //! - Scenario 2: Upfront rejection of unsupported architecture revisions with `K3Error::CapabilityMismatch`.
 //! - Scenario 3: Guaranteed alignment between tokenization and execution recipe.
 
-use k3_core::K3Error;
-use k3_manager::store::{CapabilityFilter, ModelManifest};
-use k3_tokenizer::SimpleTokenizer;
+use jero_core::K3Error;
+use jero_manager::store::{CapabilityFilter, ModelManifest};
+use jero_tokenizer::SimpleTokenizer;
 
 #[test]
 fn test_scenario1_capability_filtering_during_model_search() {

@@ -13,7 +13,7 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use k3_core::K3Error;
+use jero_core::K3Error;
 use serde::{Deserialize, Serialize};
 
 use super::cas::ContentAddressedStore;

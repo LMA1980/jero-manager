@@ -5,12 +5,12 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use k3_core::ipc::protocol::{
+use jero_core::ipc::protocol::{
     AllocateArenaRequest, AllocateArenaResponse, DeallocateArenaRequest, DeallocateArenaResponse,
     GetArenaFdRequest, GetArenaFdResponse, IpcMessage, PingRequest, PingResponse, recv_msg_frame,
     send_msg_frame,
 };
-use k3_core::ipc::shm::SharedMemoryArena;
+use jero_core::ipc::shm::SharedMemoryArena;
 
 use crate::error::ManagerError;
 

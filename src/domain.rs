@@ -11,11 +11,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use k3_core::K3Error;
-use k3_core::affinity::{
+use jero_core::K3Error;
+use jero_core::affinity::{
     A100_CLUSTER_MASK, DEFAULT_X100_COMPUTE_CAP_MASK, ResolvedControlCapacity, SOC_CLUSTER_MASK,
 };
-pub use k3_core::profile::TuningProfile;
+pub use jero_core::profile::TuningProfile;
 
 use crate::error::ManagerError;
 use crate::supervisor::WorkerPlacement;
@@ -1024,7 +1024,7 @@ impl IsolationDomainController for CgroupV2DomainController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k3_core::affinity::ControlPlaneCapacityConfig;
+    use jero_core::affinity::ControlPlaneCapacityConfig;
 
     #[test]
     fn test_format_cpuset_list_canonical_ranges() {

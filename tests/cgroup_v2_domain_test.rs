@@ -13,14 +13,14 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::ipc::shm::SharedMemoryArena;
-use k3_manager::capacity::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::ipc::shm::SharedMemoryArena;
+use jero_manager::capacity::{
     CgroupV2DomainController, ControlPlaneScheduler, DomainPlacementMode, MockCgroupFs,
     MockOsAffinityBackend, format_cpuset_list, parse_cpuset_list, resolve_worker_compute_mask,
 };
-use k3_manager::error::ManagerError;
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_manager::error::ManagerError;
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 
 #[test]
 fn test_cpuset_list_formatting_and_parsing_roundtrip() {

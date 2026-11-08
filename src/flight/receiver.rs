@@ -19,7 +19,7 @@ use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 
 use arrow_array::{Array, BinaryArray, RecordBatch, UInt64Array};
-use k3_core::K3Error;
+use jero_core::K3Error;
 
 use super::memfd::{FlightError, MemfdArena};
 

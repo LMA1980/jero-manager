@@ -17,7 +17,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use k3_core::K3Error;
+use jero_core::K3Error;
 use serde::{Deserialize, Serialize};
 
 /// Supported model weight format types.

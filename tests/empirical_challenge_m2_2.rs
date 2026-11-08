@@ -20,10 +20,10 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use k3_core::K3Error;
-use k3_manager::error::ManagerError;
-use k3_manager::supervisor::WorkerPlacement;
-use k3_manager::{
+use jero_core::K3Error;
+use jero_manager::error::ManagerError;
+use jero_manager::supervisor::WorkerPlacement;
+use jero_manager::{
     A100_CLUSTER_MASK, ControlPlaneCapacityConfig, ControlPlaneScheduler,
     DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_SPARE_RECOVERY_MASK, DEFAULT_X100_COMPUTE_CAP_MASK,
     ResolvedControlCapacityExt, X100_CLUSTER_MASK,

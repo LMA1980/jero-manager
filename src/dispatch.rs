@@ -9,14 +9,14 @@ use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
 use arrow_array::{Float32Array, UInt32Array};
-use k3_core::ipc::arrow::{wrap_floats_as_float32_array, wrap_tokens_as_uint32_array};
-use k3_core::ipc::layout::{
+use jero_core::ipc::arrow::{wrap_floats_as_float32_array, wrap_tokens_as_uint32_array};
+use jero_core::ipc::layout::{
     OutputSlabHeader, SLAB_STATUS_IDLE, SLAB_STATUS_READ, SLAB_STATUS_WRITTEN, TokenInputSlotHeader,
 };
-use k3_core::ipc::protocol::{
+use jero_core::ipc::protocol::{
     ForwardPassCommand, ForwardPassCompleted, IpcMessage, recv_msg_frame, send_msg_frame,
 };
-use k3_core::ipc::shm::SharedMemoryArena;
+use jero_core::ipc::shm::SharedMemoryArena;
 use zerocopy::FromBytes;
 
 use crate::error::ManagerError;

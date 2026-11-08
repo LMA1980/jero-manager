@@ -79,7 +79,7 @@ pub use error::ManagerError;
 pub use health::{
     HealthSupervisor, HealthSupervisorConfig, RecoveryAction, RecoveryAuditEvent, RecoveryTarget,
 };
-pub use k3_core::profile::{
+pub use jero_core::profile::{
     CONSERVATIVE_DEFAULT_A100_CORES, CONSERVATIVE_DEFAULT_N_CTX, CONSERVATIVE_DEFAULT_X100_CORES,
     CONSERVATIVE_TUNING_ADVISORY, CONSTRAINED_TEST_N_CTX, ComputePool, CostProfile, ModelEntry,
     ModelListResponse, ModelLoadAuditEvent, ModelProfile, PriorityClass, ProfileStatus,

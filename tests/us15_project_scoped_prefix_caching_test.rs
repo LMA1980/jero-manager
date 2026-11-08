@@ -9,8 +9,8 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::assert_is_empty)]
 
-use k3_core::ipc::layout::KvBlockMeta;
-use k3_manager::prefix::{PrefixKey, PrefixRadixIndex};
+use jero_core::ipc::layout::KvBlockMeta;
+use jero_manager::prefix::{PrefixKey, PrefixRadixIndex};
 
 fn make_tokens(count: usize, base: u32) -> Vec<u32> {
     (0..count).map(|i| base + i as u32).collect()

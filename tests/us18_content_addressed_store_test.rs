@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use k3_manager::persistence::DuckDbPersistenceStore;
-use k3_manager::store::{ContentAddressedStore, ENV_STORE_ROOT, ModelManifest, Sha256};
+use jero_manager::persistence::DuckDbPersistenceStore;
+use jero_manager::store::{ContentAddressedStore, ENV_STORE_ROOT, ModelManifest, Sha256};
 
 static GLOBAL_SEQ: AtomicU64 = AtomicU64::new(1);
 

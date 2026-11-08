@@ -41,17 +41,17 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use k3_core::error::K3Error;
-use k3_core::ipc::layout::{ARENA_MAGIC, ARENA_VERSION, ArenaHeader, KvBlockMeta, KvBlockTag};
-use k3_core::ipc::protocol::StatusCode;
-use k3_core::ipc::shm::{DEFAULT_LIMIT_MEMLOCK_BYTES, SharedMemoryArena};
-use k3_kv::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
-use k3_manager::error::ManagerError;
-use k3_manager::prefix::{PrefixKey, PrefixRadixIndex};
-use k3_manager::prompt::validate_and_tokenize;
-use k3_manager::session::{DEFAULT_RETENTION_WINDOW, SessionError, SessionRegistry};
-use k3_manager::supervisor::{ManagedWorker, WorkerPlacement, WorkerSupervisor};
-use k3_tokenizer::SimpleTokenizer;
+use jero_core::error::K3Error;
+use jero_core::ipc::layout::{ARENA_MAGIC, ARENA_VERSION, ArenaHeader, KvBlockMeta, KvBlockTag};
+use jero_core::ipc::protocol::StatusCode;
+use jero_core::ipc::shm::{DEFAULT_LIMIT_MEMLOCK_BYTES, SharedMemoryArena};
+use jero_kv_cache::holder::{ArenaAllocationConfig, KvError, KvHolder, compute_arena_layout};
+use jero_manager::error::ManagerError;
+use jero_manager::prefix::{PrefixKey, PrefixRadixIndex};
+use jero_manager::prompt::validate_and_tokenize;
+use jero_manager::session::{DEFAULT_RETENTION_WINDOW, SessionError, SessionRegistry};
+use jero_manager::supervisor::{ManagedWorker, WorkerPlacement, WorkerSupervisor};
+use jero_tokenizer::SimpleTokenizer;
 
 fn make_tokens(count: usize, base: u32) -> Vec<u32> {
     (0..count).map(|i| base + i as u32).collect()

@@ -76,22 +76,22 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use k3_core::K3Error;
-use k3_core::affinity::{
+use jero_core::K3Error;
+use jero_core::affinity::{
     A100_CLUSTER_MASK, DEFAULT_ACTIVE_CONTROL_MASK, DEFAULT_SPARE_RECOVERY_MASK,
     DEFAULT_X100_COMPUTE_CAP_MASK,
 };
-use k3_core::ipc::layout::KvBlockMeta;
-use k3_core::profile::{
+use jero_core::ipc::layout::KvBlockMeta;
+use jero_core::profile::{
     CONSERVATIVE_TUNING_ADVISORY, CONSTRAINED_TEST_N_CTX, PriorityClass, TuningProfile,
 };
-use k3_manager::error::ManagerError;
-use k3_manager::persistence::{
+use jero_manager::error::ManagerError;
+use jero_manager::persistence::{
     PersistenceError, PersistenceStore, Project, SessionLastTurn, SqlitePersistenceStore, Tenant,
 };
-use k3_manager::prefix::PrefixRadixIndex;
-use k3_manager::queue::{AdmissionQueueConfig, ModelAdmissionQueue};
-use k3_manager::router::{
+use jero_manager::prefix::PrefixRadixIndex;
+use jero_manager::queue::{AdmissionQueueConfig, ModelAdmissionQueue};
+use jero_manager::router::{
     DecisionRouter, ModelCapability, ModelTarget, RouterConfig, RoutingRequest,
 };
 
@@ -254,7 +254,7 @@ fn test_tier2_us09_empty_pending_queue_drain_behavior() {
 #[test]
 fn test_tier2_us09_unaligned_prompt_token_length_tail_block_underfill() {
     let prompt_tokens = 1_usize; // Single token prompt
-    let block_size = k3_manager::prefix::BLOCK_SIZE_TOKENS; // 16
+    let block_size = jero_manager::prefix::BLOCK_SIZE_TOKENS; // 16
 
     let full_blocks = prompt_tokens / block_size;
     let tail_tokens = prompt_tokens % block_size;

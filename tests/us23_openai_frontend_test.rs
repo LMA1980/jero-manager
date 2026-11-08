@@ -20,18 +20,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use k3_core::affinity::ControlPlaneCapacityConfig;
-use k3_core::profile::{
+use jero_core::affinity::ControlPlaneCapacityConfig;
+use jero_core::profile::{
     CONSERVATIVE_TUNING_ADVISORY, ComputePool, ModelListResponse, PriorityClass, TuningProfile,
 };
-use k3_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
-use k3_manager::protocol::{
+use jero_manager::domain::{MockOsAffinityBackend, OsAffinityBackend};
+use jero_manager::protocol::{
     HttpRequest, HttpResponseBody, OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse,
     OpenAiErrorResponse, OpenAiFunction, OpenAiMessage, OpenAiTool, ProtocolServer,
     ProtocolServerConfig,
 };
-use k3_manager::queue::AdmissionQueueConfig;
-use k3_manager::runtime::{AdminCommand, ControlPlaneRuntime};
+use jero_manager::queue::AdmissionQueueConfig;
+use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime};
 
 /// Builds an isolated in-memory test runtime.
 fn build_test_runtime() -> Arc<ControlPlaneRuntime> {

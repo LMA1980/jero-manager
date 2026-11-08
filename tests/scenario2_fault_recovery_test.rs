@@ -22,11 +22,11 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use k3_core::ipc::layout::KvBlockTag;
-use k3_kv::server::{KvServer, ServerConfig};
-use k3_manager::client::KvClient;
-use k3_manager::dispatch::ForwardPassRequest;
-use k3_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
+use jero_core::ipc::layout::KvBlockTag;
+use jero_kv_cache::server::{KvServer, ServerConfig};
+use jero_manager::client::KvClient;
+use jero_manager::dispatch::ForwardPassRequest;
+use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(200);
 

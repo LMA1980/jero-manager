@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
-use k3_core::K3Error;
-use k3_tokenizer::{ChatTemplate, SpecialTokens, Tokenizer};
+use jero_core::K3Error;
+use jero_tokenizer::{ChatTemplate, SpecialTokens, Tokenizer};
 
 use super::cas::ModelManifest;
 
@@ -350,9 +350,9 @@ impl CapabilityFilter {
                         reason: Some("model context length must be greater than 0".to_owned()),
                     }
                 } else if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-                    if let Err(err) = k3_arch_mistral::evaluate_moe_memlock_admission(
+                    if let Err(err) = jero_arch_mistral::evaluate_moe_memlock_admission(
                         manifest,
-                        k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
+                        jero_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
                     ) {
                         CandidateSuitability {
                             executable: false,
@@ -361,7 +361,7 @@ impl CapabilityFilter {
                             quantization_supported: true,
                             reason: Some(format!(
                                 "{err}: {}",
-                                k3_arch_mistral::COMPACT_MOE_ADVISORY
+                                jero_arch_mistral::COMPACT_MOE_ADVISORY
                             )),
                         }
                     } else {
@@ -458,9 +458,9 @@ impl CapabilityFilter {
 
         // MoE memlock admission check for Mixtral
         if manifest.architecture_id.eq_ignore_ascii_case("mixtral") {
-            k3_arch_mistral::evaluate_moe_memlock_admission(
+            jero_arch_mistral::evaluate_moe_memlock_admission(
                 manifest,
-                k3_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
+                jero_arch_mistral::DEFAULT_MEMLOCK_LIMIT_BYTES,
             )?;
         }
 
