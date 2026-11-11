@@ -19,11 +19,11 @@ pedantic = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"
 
 [dependencies]
-jero-arch-mistral = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-mistral.git", branch = "feat/m8-naming-alignment", default-features = false }
-jero-core = { version = "0.1.0", git = "https://github.com/LMA1980/jero-core.git", branch = "feat/m8-naming-alignment" }
-jero-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/jero-tokenizer.git", branch = "feat/m8-naming-alignment" }
-jero-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kernels-rvv.git", branch = "feat/m8-naming-alignment" }
-mu-observable-ipc = { version = "0.1.0", git = "https://github.com/LMA1980/mu-observable-ipc.git", branch = "feat/m8-naming-alignment" }
+jero-arch-mistral = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-mistral.git", branch = "main", default-features = false }
+jero-core = { version = "0.1.0", git = "https://github.com/LMA1980/jero-core.git", branch = "main" }
+jero-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/jero-tokenizer.git", branch = "main" }
+jero-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kernels-rvv.git", branch = "main" }
+mu-observable-ipc = { version = "0.1.0", git = "https://github.com/LMA1980/mu-observable-ipc.git", branch = "main" }
 arrow-array = "59.3.1"
 arrow-buffer = "59.3.1"
 arrow-schema = "59.3.1"
@@ -36,4 +36,4 @@ zerocopy = { version = "0.8.63", features = ["derive"] }
 duckdb = { version = "=1.2.2", default-features = false }
 
 [dev-dependencies]
-jero-kv-cache = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kv-cache.git", branch = "feat/m8-naming-alignment" }
+jero-kv-cache = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kv-cache.git", branch = "main" }
