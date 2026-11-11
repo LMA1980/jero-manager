@@ -48,8 +48,27 @@ pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
         }
     }
 
-    if let Some(bin) =
-        option_env!("CARGO_BIN_EXE_jero-worker").or(option_env!("CARGO_BIN_EXE_k3-worker"))
+    // 1. Explicit runtime environment variable overrides
+    for env_key in &[
+        "JERO_WORKER_BIN",
+        "CARGO_BIN_EXE_jero_worker",
+        "CARGO_BIN_EXE_jero-worker",
+        "CARGO_BIN_EXE_k3_worker",
+        "CARGO_BIN_EXE_k3-worker",
+    ] {
+        if let Ok(val) = std::env::var(env_key) {
+            let p = PathBuf::from(val);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+    }
+
+    // 2. Compile-time environment variable overrides (Cargo converts hyphens to underscores)
+    if let Some(bin) = option_env!("CARGO_BIN_EXE_jero_worker")
+        .or(option_env!("CARGO_BIN_EXE_jero-worker"))
+        .or(option_env!("CARGO_BIN_EXE_k3_worker"))
+        .or(option_env!("CARGO_BIN_EXE_k3-worker"))
     {
         let p = PathBuf::from(bin);
         if p.exists() {
@@ -57,27 +76,29 @@ pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
         }
     }
 
+    // 3. Search relative to current test/executable binary (e.g. under cargo test or cargo llvm-cov)
     if let Ok(curr) = std::env::current_exe() {
-        if let Some(dir) = curr.parent() {
-            let candidate = dir.join("jero-worker");
-            if candidate.exists() {
-                return Ok(candidate);
+        let mut ancestor = curr.parent();
+        while let Some(dir) = ancestor {
+            for name in &["jero-worker", "k3-worker"] {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+                let debug_candidate = dir.join("debug").join(name);
+                if debug_candidate.is_file() {
+                    return Ok(debug_candidate);
+                }
+                let release_candidate = dir.join("release").join(name);
+                if release_candidate.is_file() {
+                    return Ok(release_candidate);
+                }
             }
-            let candidate_fallback = dir.join("k3-worker");
-            if candidate_fallback.exists() {
-                return Ok(candidate_fallback);
-            }
-            let candidate_parent = dir.join("../jero-worker");
-            if candidate_parent.exists() {
-                return Ok(candidate_parent);
-            }
-            let candidate_parent_fallback = dir.join("../k3-worker");
-            if candidate_parent_fallback.exists() {
-                return Ok(candidate_parent_fallback);
-            }
+            ancestor = dir.parent();
         }
     }
 
+    // 4. Relative paths from workspace CWD
     for path in &[
         "target/debug/jero-worker",
         "target/release/jero-worker",
@@ -85,6 +106,10 @@ pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
         "../target/release/jero-worker",
         "../../target/debug/jero-worker",
         "../../target/release/jero-worker",
+        "code/target/debug/jero-worker",
+        "code/target/release/jero-worker",
+        "../code/target/debug/jero-worker",
+        "../code/target/release/jero-worker",
         "target/debug/k3-worker",
         "target/release/k3-worker",
         "../target/debug/k3-worker",
