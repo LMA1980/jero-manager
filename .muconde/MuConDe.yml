@@ -16,8 +16,8 @@ deployment:
   target_nodes:
     - "worker-riscv64"
     - "node-a"
-  binary: "k3-store"
-  install_path: "/usr/local/bin/k3-store"
+  binary: "jero-manager"
+  install_path: "/usr/local/bin/jero-manager"
   systemd_unit: "jero-manager.service"
 
 verification:

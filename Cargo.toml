@@ -6,6 +6,15 @@ edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
 repository = "https://github.com/LMA1980/jero-manager"
+default-run = "jero-manager"
+
+[[bin]]
+name = "jero-manager"
+path = "src/main.rs"
+
+[[bin]]
+name = "k3-store"
+path = "src/bin/k3-store.rs"
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
