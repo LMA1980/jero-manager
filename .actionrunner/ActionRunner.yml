@@ -4,6 +4,9 @@ sccache: try
 
 env:
   CARGO_TERM_COLOR: "always"
+  CARGO_BUILD_JOBS: "4"
+  RAYON_NUM_THREADS: "4"
+  RUST_TEST_THREADS: "4"
 
 tasks:
   fmt-task:
@@ -27,7 +30,7 @@ tasks:
   build-task:
     tool: "cargo-build"
     args: ["--workspace", "--all-targets"]
-    timeout_seconds: 900
+    timeout_seconds: 1200
     sandbox_profile: "default_ci"
 
   test-task:
@@ -65,7 +68,7 @@ stages:
     name: "Verify Rust Linter & Clippy Rules (cargo clippy)"
     tasks: ["clippy-task"]
     depends_on: ["fmt-check"]
-    tags: ["clippy"]
+    tags: ["clippy", "x86_64"]
     threads: 4
     exclusive: false
     max_concurrent_per_node: 1
@@ -83,8 +86,8 @@ stages:
     name: "Build Workspace Targets (cargo build)"
     tasks: ["build-task"]
     depends_on: ["clippy-check"]
-    tags: ["build"]
-    threads: 6
+    tags: ["build", "x86_64"]
+    threads: 4
     exclusive: false
     max_concurrent_per_node: 1
 
@@ -92,8 +95,8 @@ stages:
     name: "Execute Test Suite (cargo test)"
     tasks: ["test-task"]
     depends_on: ["build-check"]
-    tags: ["test"]
-    threads: 6
+    tags: ["test", "x86_64"]
+    threads: 4
     exclusive: false
     max_concurrent_per_node: 1
 
@@ -101,8 +104,8 @@ stages:
     name: "Evaluate Line Code Coverage (cargo llvm-cov)"
     tasks: ["coverage-task"]
     depends_on: ["test-check", "audit-check"]
-    tags: ["test"]
-    threads: 6
+    tags: ["test", "x86_64"]
+    threads: 4
     exclusive: false
     max_concurrent_per_node: 1
 
@@ -110,8 +113,8 @@ stages:
     name: "Verify Safe Execution & Undefined Behavior (cargo miri)"
     tasks: ["miri-task"]
     depends_on: ["test-check"]
-    tags: ["test"]
-    threads: 6
+    tags: ["test", "x86_64"]
+    threads: 4
     exclusive: false
     max_concurrent_per_node: 1
 
