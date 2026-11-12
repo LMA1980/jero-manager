@@ -29,19 +29,19 @@ tasks:
 
   build-task:
     tool: "cargo-build"
-    args: ["--workspace", "--all-targets", "--jobs", "4"]
+    args: ["--workspace", "--all-targets"]
     timeout_seconds: 1200
     sandbox_profile: "default_ci"
 
   test-task:
     tool: "cargo-test"
-    args: ["--workspace", "--jobs", "4"]
+    args: ["--workspace"]
     timeout_seconds: 1200
     sandbox_profile: "default_ci"
 
   coverage-task:
     tool: "cargo-llvm-cov"
-    args: ["--workspace", "--summary-only", "--jobs", "4"]
+    args: ["--workspace", "--summary-only"]
     timeout_seconds: 1800
     sandbox_profile: "default_ci"
 
