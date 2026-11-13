@@ -133,6 +133,7 @@ fn test_scenario1_control_responsiveness_under_saturation_e2e() {
         add_bos_token: false,
         stop_tokens: vec![2, 3],
         stop_sequences: vec!["<|im_end|>".to_owned()],
+        ..Default::default()
     };
     tok.set_special_tokens(special);
 

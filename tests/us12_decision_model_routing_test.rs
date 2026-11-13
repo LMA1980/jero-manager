@@ -6,12 +6,17 @@
 //! - Scenario 3: Fallback models and structured `RoutingUnavailable` diagnostics when routers or models are unavailable.
 //! - Confidence-based fallback escalation chains across specialist tiers.
 
+use std::collections::HashMap;
+
 use jero_core::profile::PriorityClass;
 use jero_manager::error::ManagerError;
+use jero_manager::prompt::{format_functiongemma_prompt, format_octopus_prompt};
 use jero_manager::router::{
-    DecisionRouter, ExecutionAssessment, ModelCapability, ModelTarget, RouterConfig,
-    RoutingRequest, StructuralConstraint,
+    DecisionRouter, ExecutionAssessment, FunctionalTokenMap, ModelCapability, ModelTarget,
+    RouterConfig, RoutingRequest, StructuralConstraint, resolve_functional_token_action,
 };
+use jero_manager::store::cas::ModelManifest;
+use jero_manager::store::filter::CapabilityFilter;
 
 fn setup_test_router() -> (DecisionRouter, Vec<String>) {
     let config = RouterConfig {
@@ -383,4 +388,95 @@ fn test_scenario3_fallback_when_router_offline_even_if_specialist_active() {
     assert_eq!(decision.selected_model, "gemma-2-9b-it");
     assert!(decision.is_fallback);
     assert_eq!(decision.routing_reason, "operator_fallback");
+}
+
+#[test]
+fn test_functional_token_slm_routing() {
+    // 1. Verify precision floor: FunctionGemma-270M & Octopus reject Q4_0 and admit Q8_0.
+    let fg_q4 = ModelManifest::new(
+        "gguf",
+        "functiongemma",
+        "1.0.0",
+        "Q4_0",
+        2048,
+        "sha256:fg-q4",
+        270_000_000,
+    );
+    let fg_q4_suit = CapabilityFilter::evaluate_candidate(&fg_q4);
+    assert!(!fg_q4_suit.executable);
+    assert!(!fg_q4_suit.quantization_supported);
+
+    let fg_q8 = ModelManifest::new(
+        "gguf",
+        "functiongemma",
+        "1.0.0",
+        "Q8_0",
+        2048,
+        "sha256:fg-q8",
+        310_000_000,
+    );
+    assert!(CapabilityFilter::evaluate_candidate(&fg_q8).executable);
+
+    let oct_q8 = ModelManifest::new(
+        "gguf",
+        "octopus",
+        "1.0.0",
+        "Q8_0",
+        4096,
+        "sha256:oct-q8",
+        2_200_000_000,
+    );
+    assert!(CapabilityFilter::evaluate_candidate(&oct_q8).executable);
+
+    // 2. Prompt template formatting + 1-step functional token dispatch.
+    let fg_prompt = format_functiongemma_prompt("turn on living room light");
+    assert!(fg_prompt.starts_with("<start_of_turn>user\n"));
+    let oct_prompt = format_octopus_prompt("get current weather");
+    assert!(oct_prompt.contains("Query: get current weather"));
+
+    let mut action_map = HashMap::new();
+    action_map.insert(32000, "<nexa_0>".to_owned());
+    action_map.insert(32001, "<nexa_1>".to_owned());
+    action_map.insert(32002, "<nexa_2>".to_owned());
+    let func_map = FunctionalTokenMap::new(action_map, 32003);
+
+    let mut logits = vec![-4.0_f32; 32010];
+    logits[32001] = 8.5;
+    let (action, token_id, prob) =
+        resolve_functional_token_action(&logits, &func_map).expect("1-step functional dispatch");
+    assert_eq!(action, "<nexa_1>");
+    assert_eq!(token_id, 32001);
+    assert!(prob > 0.99);
+
+    // 3. Control-plane router selects explicit decision action SLM cleanly.
+    let (router, _) = setup_test_router();
+    router.register_capability(ModelCapability {
+        model_id: "functiongemma-270m".to_owned(),
+        domains: vec!["tool_call".to_owned(), "classification".to_owned()],
+        supports_grammar: true,
+        supports_json_schema: true,
+        context_tokens: 2048,
+        priority_class: PriorityClass::Latency,
+        is_decision_model: true,
+        cost_weight: 0.05,
+    });
+    let active = vec![
+        "tev1".to_owned(),
+        "functiongemma-270m".to_owned(),
+        "gemma-2-9b-it".to_owned(),
+    ];
+    let decision = router
+        .route(
+            &RoutingRequest {
+                target: ModelTarget::Named("functiongemma-270m".to_owned()),
+                prompt: &fg_prompt,
+                token_count: Some(24),
+                constraint: Some(StructuralConstraint::JsonSchema(
+                    "{\"type\":\"object\"}".to_owned(),
+                )),
+            },
+            &active,
+        )
+        .expect("named decision SLM routing succeeds");
+    assert_eq!(decision.selected_model, "functiongemma-270m");
 }

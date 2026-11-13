@@ -52,6 +52,7 @@ fn setup_runtime() -> (Arc<ControlPlaneRuntime>, Arc<MockOsAffinityBackend>) {
         add_bos_token: false,
         stop_tokens: vec![2, 3],
         stop_sequences: vec!["<|im_end|>".to_owned()],
+        ..Default::default()
     };
     tok.set_special_tokens(special);
 

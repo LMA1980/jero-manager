@@ -9,7 +9,11 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
+use jero_core::K3Error;
 use jero_core::profile::PriorityClass;
+use jero_tokenizer::{
+    FUNCTION_GEMMA_CALL_END, OCTOPUS_NEXA_END_TOKEN, SpecialTokens, is_functional_action_token,
+};
 
 use crate::error::ManagerError;
 
@@ -496,5 +500,200 @@ impl DecisionRouter {
         }
 
         ("general", 0.50)
+    }
+}
+
+/// Maps learned functional vocabulary token IDs (`<nexa_0>..<nexa_k>`,
+/// `<start_function_call>`, `<|tool_call|>`) to canonical action/tool names
+/// for single-step functional token routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionalTokenMap {
+    /// Maps `<nexa_k>` or functional token ID to canonical tool/action name.
+    pub token_to_action: HashMap<u32, String>,
+    /// Termination token ID closing the functional action emission (`<nexa_end>` or `<end_function_call>`).
+    pub end_token_id: u32,
+}
+
+impl FunctionalTokenMap {
+    /// Creates a [`FunctionalTokenMap`] from an explicit token-ID-to-action map and termination ID.
+    #[must_use]
+    pub const fn new(token_to_action: HashMap<u32, String>, end_token_id: u32) -> Self {
+        Self {
+            token_to_action,
+            end_token_id,
+        }
+    }
+
+    /// Builds a [`FunctionalTokenMap`] from extracted GGUF [`SpecialTokens::functional_tokens`].
+    ///
+    /// Termination sentinels (`<nexa_end>`, `<end_function_call>`, `</tool_call>`) set
+    /// `end_token_id`, while action-dispatch tokens are registered into `token_to_action`.
+    #[must_use]
+    pub fn from_special_tokens(special_tokens: &SpecialTokens) -> Self {
+        let mut token_to_action = HashMap::new();
+        let mut end_token_id = 0_u32;
+
+        for (token_text, id) in &special_tokens.functional_tokens {
+            if token_text == OCTOPUS_NEXA_END_TOKEN
+                || token_text == FUNCTION_GEMMA_CALL_END
+                || token_text == "</tool_call>"
+            {
+                if end_token_id == 0 {
+                    end_token_id = *id;
+                }
+                continue;
+            }
+            if is_functional_action_token(token_text) {
+                let canonical = token_text
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .trim_matches('|')
+                    .to_owned();
+                token_to_action.insert(*id, canonical);
+            }
+        }
+
+        Self {
+            token_to_action,
+            end_token_id,
+        }
+    }
+}
+
+/// Resolves the highest-probability registered functional action token in a single step.
+///
+/// Computes softmax probabilities strictly over functional token IDs registered in
+/// `func_map.token_to_action`, breaking exact logit ties deterministically toward the
+/// lowest `token_id`, and returns `(action_name, token_id, probability)`.
+///
+/// # Errors
+/// Returns [`K3Error::CapabilityMismatch`] if `logits` or `func_map.token_to_action` is empty,
+/// and [`K3Error::TensorBoundsError`] if no registered functional token ID is valid and finite.
+pub fn resolve_functional_token_action(
+    logits: &[f32],
+    func_map: &FunctionalTokenMap,
+) -> Result<(String, u32, f32), K3Error> {
+    if logits.is_empty() || func_map.token_to_action.is_empty() {
+        return Err(K3Error::CapabilityMismatch {
+            architecture: "functional_token_router".to_owned(),
+            reason: "logits and functional token map must both be non-empty".to_owned(),
+        });
+    }
+
+    let mut candidates: Vec<(u32, &str, f32)> = func_map
+        .token_to_action
+        .iter()
+        .filter_map(|(&token_id, action)| {
+            let idx = usize::try_from(token_id).ok()?;
+            let &logit = logits.get(idx)?;
+            if logit.is_finite() {
+                Some((token_id, action.as_str(), logit))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return Err(K3Error::TensorBoundsError {
+            tensor_name: "logits".to_owned(),
+            offset: 0,
+            byte_len: logits.len(),
+            buffer_len: logits.len(),
+            reason: "no registered functional token ID falls within finite logits bounds"
+                .to_owned(),
+        });
+    }
+
+    candidates.sort_by_key(|entry| entry.0);
+
+    let mut best_id = candidates[0].0;
+    let mut best_action = candidates[0].1;
+    let mut best_logit = candidates[0].2;
+
+    for &(token_id, action, logit) in &candidates[1..] {
+        if logit > best_logit {
+            best_id = token_id;
+            best_action = action;
+            best_logit = logit;
+        }
+    }
+
+    let mut sum_exp = 0.0_f64;
+    for &(_, _, logit) in &candidates {
+        sum_exp += f64::from(logit - best_logit).exp();
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let prob = if sum_exp > 0.0 {
+        (1.0_f64 / sum_exp) as f32
+    } else {
+        1.0_f32
+    };
+
+    Ok((best_action.to_owned(), best_id, prob))
+}
+
+#[cfg(test)]
+mod functional_token_tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_functional_token_action() {
+        let mut map = HashMap::new();
+        map.insert(10, "get_weather".to_owned());
+        map.insert(11, "turn_on_lights".to_owned());
+        map.insert(12, "set_timer".to_owned());
+        let func_map = FunctionalTokenMap::new(map, 13);
+
+        // Background vocab token 0 has higher raw logit (99.0), but only registered functional
+        // tokens (10, 11, 12) participate in 1-step action selection.
+        let mut logits = vec![0.0_f32; 16];
+        logits[0] = 99.0;
+        logits[10] = 1.5;
+        logits[11] = 4.25;
+        logits[12] = 2.0;
+
+        let (action, token_id, prob) =
+            resolve_functional_token_action(&logits, &func_map).expect("resolve action");
+        assert_eq!(action, "turn_on_lights");
+        assert_eq!(token_id, 11);
+        assert!(prob > 0.80 && prob <= 1.0);
+
+        // Deterministic tie-breaking selects lowest token ID (10 < 12).
+        logits[10] = 5.0;
+        logits[11] = 1.0;
+        logits[12] = 5.0;
+        let (tie_action, tie_id, _) =
+            resolve_functional_token_action(&logits, &func_map).expect("tie resolve");
+        assert_eq!(tie_action, "get_weather");
+        assert_eq!(tie_id, 10);
+    }
+
+    #[test]
+    fn test_octopus_nexa_token_resolver() {
+        let special = SpecialTokens {
+            functional_tokens: vec![
+                ("<nexa_0>".to_owned(), 3),
+                ("<nexa_1>".to_owned(), 4),
+                ("<nexa_2>".to_owned(), 5),
+                ("<nexa_end>".to_owned(), 6),
+            ],
+            ..Default::default()
+        };
+        let func_map = FunctionalTokenMap::from_special_tokens(&special);
+        assert_eq!(func_map.end_token_id, 6);
+        assert_eq!(func_map.token_to_action.len(), 3);
+        assert_eq!(
+            func_map.token_to_action.get(&4).map(String::as_str),
+            Some("nexa_1")
+        );
+
+        let mut logits = vec![-2.0_f32; 8];
+        logits[4] = 6.0;
+        let (action, id, prob) =
+            resolve_functional_token_action(&logits, &func_map).expect("nexa resolve");
+        assert_eq!(action, "nexa_1");
+        assert_eq!(id, 4);
+        assert!(prob > 0.99);
     }
 }

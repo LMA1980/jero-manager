@@ -343,3 +343,92 @@ fn test_us16_multiple_client_subscribers_on_reconnected_stream() {
     assert_eq!(sub2.try_recv(), Ok(201));
     assert_eq!(sub2.try_recv(), Ok(202));
 }
+
+#[test]
+fn test_us16_jump_forward_burst_crash_resumable_checkpoint_integrity() {
+    let mut arena = init_resumable_arena("shm_jump_forward_crash");
+
+    // Initial prefill block committed cleanly: 16 tokens before jump-forward bursts.
+    let pre_rng = [11_u64, 22, 33, 44];
+    {
+        let b0 = arena.block_meta_mut(0).expect("block 0");
+        b0.committed_token_count = 16;
+        b0.tag = KvBlockTag::Persist.as_u8();
+        b0.sampler_rng_state = pre_rng;
+    }
+
+    let dup_arena = arena
+        .duplicate_fd()
+        .and_then(|fd| SharedMemoryArena::from_existing_fd(fd, 65536, "dup_jf", false))
+        .expect("dup_arena");
+    let (sock_a, _sock_b) = UnixStream::pair().expect("socketpair");
+
+    let placement = WorkerPlacement::new("jump-forward-test", "/dev/null", "/dev/null", "x100");
+    let mut worker =
+        ManagedWorker::create_test_worker(placement, sock_a, dup_arena, 1, 65536, 64, 4);
+
+    // 1. Oversized burst failing validation must leave zero torn state across blocks.
+    let err = worker
+        .commit_jump_forward_checkpoint(&[0, 1], 17, [9, 9, 9, 9])
+        .expect_err("oversized jump-forward burst must fail atomically");
+    assert!(matches!(err, jero_manager::error::ManagerError::Kv(_)));
+    assert_eq!(
+        arena.block_meta(1).expect("block 1").committed_token_count,
+        0
+    );
+
+    // 2. Crash mid-burst before checkpoint commit recovers cleanly at token boundary 16.
+    worker.kill(libc::SIGKILL).expect("kill worker");
+    let pre_commit_snap = worker
+        .inspect_resumption_state(&[0, 1], 16)
+        .expect("pre-commit snapshot");
+    assert_eq!(pre_commit_snap.total_committed_tokens, 16);
+    assert_eq!(pre_commit_snap.next_decode_pos, 16);
+    assert!(pre_commit_snap.skip_prefill);
+    assert_eq!(pre_commit_snap.sampler_rng_state, pre_rng);
+
+    // 3. After an atomic jump-forward burst checkpoint (10 forced structural tokens into block 1),
+    // crash recovery resumes from boundary 26 with exact RNG state and session stream integrity.
+    let post_rng = [555_u64, 666, 777, 888];
+    let committed = worker
+        .commit_jump_forward_checkpoint(&[0, 1], 10, post_rng)
+        .expect("atomic jump-forward commit succeeds");
+    assert_eq!(committed, 26);
+
+    let registry = SessionRegistry::new();
+    let session_id = "jump-forward-session";
+    registry
+        .register_session(session_id, "proj-fsm", "functiongemma")
+        .expect("register session");
+    let mut sub = registry.subscribe(session_id).expect("subscribe");
+    let forced_burst = [401_u32, 402, 403, 404, 405, 406, 407, 408, 409, 410];
+    let appended = registry
+        .append_jump_forward_burst(session_id, &forced_burst)
+        .expect("append jump-forward burst");
+    assert_eq!(appended, 10);
+
+    worker.kill(libc::SIGKILL).expect("kill worker");
+    let post_commit_snap = worker
+        .inspect_resumption_state(&[0, 1], 16)
+        .expect("post-commit snapshot");
+    assert_eq!(post_commit_snap.total_committed_tokens, 26);
+    assert_eq!(post_commit_snap.next_decode_pos, 26);
+    assert!(post_commit_snap.skip_prefill);
+    assert_eq!(post_commit_snap.sampler_rng_state, post_rng);
+
+    let disconnect_time = Instant::now();
+    registry
+        .record_disconnect(session_id)
+        .expect("record disconnect");
+    let catchup = registry
+        .reconnect_client_at(
+            session_id,
+            Some(3),
+            disconnect_time + Duration::from_secs(1),
+        )
+        .expect("catchup after jump-forward burst");
+    assert_eq!(catchup, forced_burst[4..]);
+    for &expected in &forced_burst {
+        assert_eq!(sub.try_recv(), Ok(expected));
+    }
+}
