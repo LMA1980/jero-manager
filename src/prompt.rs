@@ -10,8 +10,10 @@ use std::sync::{Arc, PoisonError, RwLock};
 use jero_core::K3Error;
 pub use jero_tokenizer::{
     ChatTemplate, DORY_BOS_TOKEN, DORY_EOS_TOKEN, DORY_MEDIUM_REASONING_SUFFIX, DetokenizeStep,
-    GgufTokenizer, SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
-    format_dory_chatml_prompt,
+    FUNCTION_GEMMA_CALL_END, FUNCTION_GEMMA_CALL_START, GgufTokenizer, OCTOPUS_NEXA_END_TOKEN,
+    SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
+    XLAM_TOOL_CALL_TOKEN, format_dory_chatml_prompt, format_functiongemma_prompt,
+    format_octopus_prompt, format_xlam_prompt, is_functional_action_token,
 };
 
 use crate::error::ManagerError;
@@ -594,6 +596,7 @@ mod tests {
             add_bos_token: false,
             stop_tokens: vec![2, 3, 999],
             stop_sequences: vec!["<|im_end|>".to_owned()],
+            ..Default::default()
         };
         tokenizer.set_special_tokens(special);
         tokenizer

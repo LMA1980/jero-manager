@@ -98,10 +98,12 @@ pub use prefix::{
 };
 pub use prompt::{
     ChatTemplate, DORY_BOS_TOKEN, DORY_EOS_TOKEN, DORY_MEDIUM_REASONING_SUFFIX, DetokenizeStep,
-    GgufTokenizer, IncrementalStopDetector, PreparedPrompt, PromptOrchestrator,
-    PromptPreparationRequest, SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType,
-    Tokenizer, evaluate_stop_token, format_chat_prompt, format_dory_chatml_prompt,
-    resolve_dory_loop_budget, validate_and_tokenize,
+    FUNCTION_GEMMA_CALL_END, FUNCTION_GEMMA_CALL_START, GgufTokenizer, IncrementalStopDetector,
+    OCTOPUS_NEXA_END_TOKEN, PreparedPrompt, PromptOrchestrator, PromptPreparationRequest,
+    SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
+    XLAM_TOOL_CALL_TOKEN, evaluate_stop_token, format_chat_prompt, format_dory_chatml_prompt,
+    format_functiongemma_prompt, format_octopus_prompt, format_xlam_prompt,
+    is_functional_action_token, resolve_dory_loop_budget, validate_and_tokenize,
 };
 pub use queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_ESTIMATED_PASS_LATENCY_MS,
@@ -110,8 +112,9 @@ pub use queue::{
     QueuedRequest,
 };
 pub use router::{
-    DecisionRouter, ExecutionAssessment, ModelCapability, ModelTarget, RouterConfig,
-    RoutingDecision, RoutingRequest, StructuralConstraint,
+    DecisionRouter, ExecutionAssessment, FunctionalTokenMap, ModelCapability, ModelTarget,
+    RouterConfig, RoutingDecision, RoutingRequest, StructuralConstraint,
+    resolve_functional_token_action,
 };
 pub use runtime::{
     ActiveTaskRecord, AdminCommand, AdminResponse, ControlPlaneRuntime, DEFAULT_CONTROL_TASK_LEASE,

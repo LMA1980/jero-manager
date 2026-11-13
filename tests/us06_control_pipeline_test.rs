@@ -36,6 +36,7 @@ fn create_test_simple_tokenizer() -> SimpleTokenizer {
         add_bos_token: false,
         stop_tokens: vec![2, 3, 999],
         stop_sequences: vec!["<|im_end|>".to_owned()],
+        ..Default::default()
     };
     tok.set_special_tokens(special);
     tok
@@ -640,6 +641,7 @@ fn test_sub_issue_72_text_stop_sequence_and_dispatched_detection() {
         add_bos_token: false,
         stop_tokens: vec![2, 3],
         stop_sequences: vec!["<|im_end|>".to_owned(), "### STOP".to_owned()],
+        ..Default::default()
     };
     tok.set_special_tokens(special);
     runtime.register_tokenizer("m-stop", Arc::new(tok));

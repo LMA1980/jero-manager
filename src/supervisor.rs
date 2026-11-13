@@ -932,6 +932,62 @@ impl ManagedWorker {
         );
         self.execute_forward_pass(&req)
     }
+
+    /// Atomically commits forced jump-forward token counts across KV block checkpoints (ADR-026).
+    ///
+    /// Validates capacity across `block_indices` prior to mutating any block metadata so failed or
+    /// oversized bursts leave zero torn KV checkpoint state. Returns the updated cumulative committed
+    /// token count across `block_indices`.
+    ///
+    /// # Errors
+    /// Returns [`ManagerError`] if `block_indices` is empty, block lookup fails, or capacity is exceeded.
+    pub fn commit_jump_forward_checkpoint(
+        &mut self,
+        block_indices: &[u32],
+        burst_token_count: u32,
+        rng_state: [u64; 4],
+    ) -> Result<u32, ManagerError> {
+        if block_indices.is_empty() {
+            return Err(ManagerError::Kv(
+                "commit_jump_forward_checkpoint requires at least one block index".to_owned(),
+            ));
+        }
+        let tokens_per_block = self.arena.header()?.tokens_per_block.max(1);
+        let mut available_room = 0_u32;
+        let mut existing_total = 0_u32;
+
+        for &b_idx in block_indices {
+            let meta = self.arena.block_meta(b_idx as usize)?;
+            existing_total = existing_total.saturating_add(meta.committed_token_count);
+            available_room = available_room
+                .saturating_add(tokens_per_block.saturating_sub(meta.committed_token_count));
+        }
+
+        if burst_token_count > available_room {
+            return Err(ManagerError::Kv(format!(
+                "jump-forward burst of {burst_token_count} tokens exceeds remaining block capacity ({available_room})"
+            )));
+        }
+
+        let mut remaining = burst_token_count;
+        for &b_idx in block_indices {
+            let block = self.arena.block_meta_mut(b_idx as usize)?;
+            let room = tokens_per_block.saturating_sub(block.committed_token_count);
+            let step = room.min(remaining);
+            if step > 0 {
+                block.set_committed_tokens(block.committed_token_count.saturating_add(step));
+                block.sampler_rng_state = rng_state;
+                remaining = remaining.saturating_sub(step);
+            } else if burst_token_count == 0 && block.committed_token_count > 0 {
+                block.sampler_rng_state = rng_state;
+            }
+            if remaining == 0 && burst_token_count > 0 {
+                break;
+            }
+        }
+
+        Ok(existing_total.saturating_add(burst_token_count))
+    }
 }
 
 /// Resumption snapshot describing context state recovered from surviving shared memory arena (ADR-026, ADR-042, US-16).

@@ -115,6 +115,19 @@ impl SessionState {
         let _ = self.sender.send(token_id);
     }
 
+    /// Atomically appends a forced FSM jump-forward token burst and broadcasts
+    /// each token to subscribers in sequence order.
+    pub fn append_jump_forward_burst(&mut self, forced_tokens: &[u32]) {
+        if forced_tokens.is_empty() {
+            return;
+        }
+        self.tokens.extend_from_slice(forced_tokens);
+        self.last_activity = Instant::now();
+        for &tok in forced_tokens {
+            let _ = self.sender.send(tok);
+        }
+    }
+
     /// Marks the session as disconnected at `Instant::now()`.
     pub fn record_disconnect(&mut self) {
         self.disconnected_at = Some(Instant::now());
@@ -235,6 +248,28 @@ impl SessionRegistry {
             .ok_or_else(|| SessionError::SessionNotFound(session_id.to_owned()))?;
         session.append_token(token_id);
         Ok(())
+    }
+
+    /// Atomically appends a deterministic jump-forward forced token burst to the session
+    /// catchup buffer under a single write lock and broadcasts the burst to live subscribers.
+    ///
+    /// # Errors
+    /// Returns [`SessionError::SessionNotFound`] if the session ID is not registered,
+    /// or [`SessionError::LockError`] if lock acquisition fails.
+    pub fn append_jump_forward_burst(
+        &self,
+        session_id: &str,
+        forced_tokens: &[u32],
+    ) -> Result<usize, SessionError> {
+        let mut guard = self
+            .sessions
+            .write()
+            .map_err(|e| SessionError::LockError(e.to_string()))?;
+        let session = guard
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.to_owned()))?;
+        session.append_jump_forward_burst(forced_tokens);
+        Ok(forced_tokens.len())
     }
 
     /// Records client disconnection at `Instant::now()`, initiating the retention countdown.

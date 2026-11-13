@@ -255,6 +255,99 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         );
     }
 
+    // 10. Single-pass zero-KV bidirectional encoder classifiers ("modernbert", "bert", "deberta-v3")
+    for arch in ["modernbert", "bert", "deberta-v3"] {
+        map.insert(
+            format!("{arch}@1.0.0"),
+            RecipeDescriptor {
+                architecture_id: arch,
+                recipe_version: "1.0.0",
+                supported_quants: &[
+                    "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+                ],
+                target_layouts: &["native", "ime_tile_8x16"],
+                default_chat_template: None,
+                special_tokens: None,
+            },
+        );
+    }
+
+    // 11. Functional-token & action SLMs ("functiongemma", "octopus", "xlam") enforcing Q8_0 / native i8 floor
+    let functiongemma_template = ChatTemplate::new(Some(
+        "<start_of_turn>user\n{{prompt}}<end_of_turn>\n<start_of_turn>model\n<start_function_call>"
+            .to_owned(),
+    ));
+    let functiongemma_tokens = SpecialTokens {
+        bos_token_id: Some(2),
+        eos_token_id: Some(1),
+        eot_token_id: Some(107),
+        add_bos_token: true,
+        stop_tokens: vec![1, 107],
+        stop_sequences: vec![
+            "<end_of_turn>".to_owned(),
+            "<eos>".to_owned(),
+            "<end_function_call>".to_owned(),
+        ],
+        ..Default::default()
+    };
+    map.insert(
+        "functiongemma@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "functiongemma",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(functiongemma_template),
+            special_tokens: Some(functiongemma_tokens),
+        },
+    );
+
+    let octopus_template = ChatTemplate::new(Some(
+        "Below is the query from the users, please choose the correct function and generate the parameters to call the function.\nQuery: {{prompt}}<nexa_0>\nResponse: ".to_owned(),
+    ));
+    let octopus_tokens = SpecialTokens {
+        bos_token_id: Some(1),
+        eos_token_id: Some(2),
+        add_bos_token: true,
+        stop_tokens: vec![2],
+        stop_sequences: vec!["<nexa_end>".to_owned(), "<|im_end|>".to_owned()],
+        ..Default::default()
+    };
+    map.insert(
+        "octopus@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "octopus",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(octopus_template),
+            special_tokens: Some(octopus_tokens),
+        },
+    );
+
+    let xlam_template = ChatTemplate::new(Some(
+        "<|im_start|>user\n{{prompt}}<|tool_call|><|im_end|>\n<|im_start|>assistant\n".to_owned(),
+    ));
+    let xlam_tokens = SpecialTokens {
+        bos_token_id: Some(1),
+        eos_token_id: Some(2),
+        add_bos_token: true,
+        stop_tokens: vec![2],
+        stop_sequences: vec!["<|im_end|>".to_owned(), "</tool_call>".to_owned()],
+        ..Default::default()
+    };
+    map.insert(
+        "xlam@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "xlam",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(xlam_template),
+            special_tokens: Some(xlam_tokens),
+        },
+    );
+
     RwLock::new(map)
 });
 
@@ -361,15 +454,26 @@ impl CapabilityFilter {
                     .any(|q| q.eq_ignore_ascii_case(&manifest.quantization));
 
                 if !quant_supported {
+                    let reason = if matches!(
+                        desc.architecture_id,
+                        "functiongemma" | "octopus" | "xlam"
+                    ) {
+                        format!(
+                            "quantization format '{}' is not supported by recipe '{}': sub-1B action SLM requires minimum Q8_0 / native i8 IME precision floor (supported: {:?})",
+                            manifest.quantization, key, desc.supported_quants
+                        )
+                    } else {
+                        format!(
+                            "quantization format '{}' is not supported by recipe '{}' (supported: {:?})",
+                            manifest.quantization, key, desc.supported_quants
+                        )
+                    };
                     CandidateSuitability {
                         executable: false,
                         architecture_id: manifest.architecture_id.clone(),
                         recipe_version: manifest.recipe_version.clone(),
                         quantization_supported: false,
-                        reason: Some(format!(
-                            "quantization format '{}' is not supported by recipe '{}' (supported: {:?})",
-                            manifest.quantization, key, desc.supported_quants
-                        )),
+                        reason: Some(reason),
                     }
                 } else if manifest.context_length == 0 {
                     CandidateSuitability {
@@ -466,12 +570,20 @@ impl CapabilityFilter {
             .any(|q| q.eq_ignore_ascii_case(&manifest.quantization));
 
         if !quant_supported {
-            return Err(K3Error::CapabilityMismatch {
-                architecture: manifest.architecture_id.clone(),
-                reason: format!(
+            let reason = if matches!(desc.architecture_id, "functiongemma" | "octopus" | "xlam") {
+                format!(
+                    "quantization format '{}' is not supported by recipe '{}': sub-1B action SLM requires minimum Q8_0 / native i8 IME precision floor (supported: {:?})",
+                    manifest.quantization, key, desc.supported_quants
+                )
+            } else {
+                format!(
                     "quantization format '{}' is not supported by recipe '{}' (supported: {:?})",
                     manifest.quantization, key, desc.supported_quants
-                ),
+                )
+            };
+            return Err(K3Error::CapabilityMismatch {
+                architecture: manifest.architecture_id.clone(),
+                reason,
             });
         }
 
@@ -743,5 +855,71 @@ mod tests {
 
         // Legacy gemma v1 remains intentionally uncompiled.
         assert!(!CapabilityFilter::is_supported("gemma", "1.0.0"));
+    }
+
+    #[test]
+    fn test_functiongemma_rejects_q4_0() {
+        assert!(CapabilityFilter::is_supported("functiongemma", "1.0.0"));
+        let rejected = ModelManifest::new(
+            "gguf",
+            "functiongemma",
+            "1.0.0",
+            "Q4_0",
+            2048,
+            "sha256:fg-q4",
+            270_000_000,
+        );
+        let suit = CapabilityFilter::evaluate_candidate(&rejected);
+        assert!(!suit.executable);
+        assert!(!suit.quantization_supported);
+        let reason = suit.reason.expect("precision floor reason expected");
+        assert!(reason.contains("Q8_0"));
+        assert!(reason.contains("precision floor"));
+
+        let err = CapabilityFilter::validate_model_manifest(&rejected)
+            .expect_err("Q4_0 must fail load validation");
+        assert!(err.to_string().contains("Q8_0"));
+    }
+
+    #[test]
+    fn test_action_slm_q8_0_precision_enforcement() {
+        for arch in ["modernbert", "bert", "deberta-v3"] {
+            assert!(
+                CapabilityFilter::is_supported(arch, "1.0.0"),
+                "{arch}@1.0.0 must be registered"
+            );
+        }
+
+        for arch in ["functiongemma", "octopus", "xlam"] {
+            assert!(CapabilityFilter::is_supported(arch, "1.0.0"));
+            for bad_quant in ["Q4_0", "Q4_K_M"] {
+                let bad = ModelManifest::new(
+                    "gguf",
+                    arch,
+                    "1.0.0",
+                    bad_quant,
+                    2048,
+                    "sha256:bad",
+                    500_000_000,
+                );
+                let suit = CapabilityFilter::evaluate_candidate(&bad);
+                assert!(!suit.executable, "{arch} must reject {bad_quant}");
+                assert!(!suit.quantization_supported);
+            }
+            for ok_quant in ["Q8_0", "F16", "BF16", "F32"] {
+                let ok = ModelManifest::new(
+                    "gguf",
+                    arch,
+                    "1.0.0",
+                    ok_quant,
+                    2048,
+                    "sha256:ok",
+                    500_000_000,
+                );
+                let suit = CapabilityFilter::evaluate_candidate(&ok);
+                assert!(suit.executable, "{arch} must accept {ok_quant}");
+                assert!(suit.quantization_supported);
+            }
+        }
     }
 }
