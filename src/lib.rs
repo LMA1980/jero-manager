@@ -54,6 +54,7 @@ pub use protocol::{
     OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
     OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage,
     OpenAiStop, OpenAiTool, OpenAiToolCall, OpenAiUsage, ProtocolServer, ProtocolServerConfig,
+    ThinkingTagParser,
 };
 
 pub use capacity::{
