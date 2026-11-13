@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use jero_core::error::K3Error;
 
+use crate::protocol::ThinkingTagParser;
 use crate::protocol::types::{
     HttpRequest, HttpResponse, MessageContent, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
     OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
@@ -196,6 +197,7 @@ impl OpenAiAdapter {
 
         // Detect if tool calling should be triggered for pass-through (ADR-020)
         let tool_call_trigger = Self::detect_tool_call_passthrough(&req);
+        let raw_reply = Self::raw_simulated_reply(&req.model, &prompt_text);
 
         if is_streaming {
             // Streaming SSE branch (stream: true)
@@ -258,6 +260,7 @@ impl OpenAiAdapter {
             let entry_clone = entry.clone();
             let p_tokens_stream = u32::try_from(token_count).unwrap_or(u32::MAX);
             let traceparent_stream = traceparent.clone();
+            let raw_reply_stream = raw_reply;
 
             tokio::spawn(async move {
                 // Dequeue permit on execution start so QueuedRequest.sse_sender clone is released
@@ -286,6 +289,7 @@ impl OpenAiAdapter {
                         delta: OpenAiChunkDelta {
                             role: Some("assistant".to_owned()),
                             content: Some(String::new()),
+                            reasoning_content: None,
                             tool_calls: None,
                         },
                         finish_reason: None,
@@ -307,6 +311,7 @@ impl OpenAiAdapter {
                             delta: OpenAiChunkDelta {
                                 role: None,
                                 content: None,
+                                reasoning_content: None,
                                 tool_calls: Some(vec![OpenAiToolCallChunk {
                                     index: 0,
                                     id: Some(tool_call.id),
@@ -341,25 +346,16 @@ impl OpenAiAdapter {
                     }
                     16_u32
                 } else {
-                    // Regular text content delta
-                    let content_text = "Hello! How can I assist you today?";
-                    let text_chunk = OpenAiChunkResponse {
-                        id: request_id.clone(),
-                        object: "chat.completion.chunk".to_owned(),
+                    // Reasoning + visible content deltas routed via ThinkingTagParser
+                    for text_chunk in Self::format_streaming_chunks(
+                        &request_id,
+                        &model_name,
                         created,
-                        model: model_name.clone(),
-                        choices: vec![OpenAiChunkChoice {
-                            index: 0,
-                            delta: OpenAiChunkDelta {
-                                role: None,
-                                content: Some(content_text.to_owned()),
-                                tool_calls: None,
-                            },
-                            finish_reason: None,
-                        }],
-                    };
-                    if let Ok(json) = serde_json::to_string(&text_chunk) {
-                        let _ = sse_sender.send(format!("data: {json}\n\n")).await;
+                        &[raw_reply_stream],
+                    ) {
+                        if let Ok(json) = serde_json::to_string(&text_chunk) {
+                            let _ = sse_sender.send(format!("data: {json}\n\n")).await;
+                        }
                     }
 
                     // Final choice chunk with finish_reason "stop"
@@ -453,17 +449,21 @@ impl OpenAiAdapter {
                     message: OpenAiResponseMessage {
                         role: "assistant".to_owned(),
                         content: None,
+                        reasoning_content: None,
                         tool_calls: Some(vec![tool_call]),
                     },
                     finish_reason: Some("tool_calls".to_owned()),
                 };
                 (vec![choice], 16u32)
             } else {
+                let (reasoning_content, visible_content) =
+                    ThinkingTagParser::split_full_text(raw_reply);
                 let choice = OpenAiChoice {
                     index: 0,
                     message: OpenAiResponseMessage {
                         role: "assistant".to_owned(),
-                        content: Some("Hello! How can I assist you today?".to_owned()),
+                        content: Some(visible_content),
+                        reasoning_content,
                         tool_calls: None,
                     },
                     finish_reason: Some("stop".to_owned()),
@@ -621,6 +621,53 @@ impl OpenAiAdapter {
                 arguments,
             },
         })
+    }
+
+    fn raw_simulated_reply(model: &str, prompt_text: &str) -> &'static str {
+        let model_lower = model.to_ascii_lowercase();
+        if model_lower.contains("gemma4") || prompt_text.contains("<|think|>") {
+            "<|think|>Let us analyze the algorithm step by step...<|/think|>Hello! How can I assist you today?"
+        } else if model_lower.contains("qwen3") || prompt_text.contains("<think>") {
+            "<think>Let us analyze the algorithm step by step...</think>Hello! How can I assist you today?"
+        } else {
+            "Hello! How can I assist you today?"
+        }
+    }
+
+    /// Streams raw token chunks through [`ThinkingTagParser`], producing OpenAI SSE frames
+    /// routed to `delta.reasoning_content` (`<|think|>` / `<think>`) and `delta.content`.
+    #[must_use]
+    pub fn format_streaming_chunks(
+        request_id: &str,
+        model: &str,
+        created: u64,
+        token_chunks: &[&str],
+    ) -> Vec<OpenAiChunkResponse> {
+        let mut parser = ThinkingTagParser::new();
+        let mut deltas = Vec::new();
+        for chunk in token_chunks {
+            deltas.extend(parser.push_openai_deltas(chunk));
+        }
+        deltas.extend(parser.finish_openai_deltas());
+
+        deltas
+            .into_iter()
+            .filter(|delta| {
+                !delta.content.as_deref().is_none_or(str::is_empty)
+                    || !delta.reasoning_content.as_deref().is_none_or(str::is_empty)
+            })
+            .map(|delta| OpenAiChunkResponse {
+                id: request_id.to_owned(),
+                object: "chat.completion.chunk".to_owned(),
+                created,
+                model: model.to_owned(),
+                choices: vec![OpenAiChunkChoice {
+                    index: 0,
+                    delta,
+                    finish_reason: None,
+                }],
+            })
+            .collect()
     }
 
     fn extract_arguments_from_prompt(

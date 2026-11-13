@@ -335,6 +335,9 @@ pub struct OpenAiResponseMessage {
     pub role: String,
     /// Generated text content.
     pub content: Option<String>,
+    /// Extracted reasoning trace from `<|think|>...<|/think|>` or `<think>...</think>` spans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     /// Generated tool calls if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAiToolCall>>,
@@ -404,6 +407,9 @@ pub struct OpenAiChunkDelta {
     /// Partial generated text content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Partial extracted reasoning delta from thinking spans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     /// Partial tool calls delta.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAiToolCallChunk>>,

@@ -20,7 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jero_core::error::K3Error;
+use jero_tokenizer::ThinkingDelta;
 
+use crate::protocol::ThinkingTagParser;
 use crate::protocol::types::{
     ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse,
     ClaudeMessageRequest, ClaudeMessageResponse, ClaudeUsage, HttpRequest, HttpResponse,
@@ -358,7 +360,13 @@ impl ClaudeAdapter {
                         ))
                         .await;
 
-                    let think_text = "Let us analyze the algorithm step by step...";
+                    let raw_tagged = if model_name.to_ascii_lowercase().contains("gemma4") {
+                        "<|think|>Let us analyze the algorithm step by step...<|/think|>"
+                    } else {
+                        "<think>Let us analyze the algorithm step by step...</think>"
+                    };
+                    let (parsed_think, _) = ThinkingTagParser::split_full_text(raw_tagged);
+                    let think_text = parsed_think.unwrap_or_default();
                     let block_delta = serde_json::json!({
                         "type": "content_block_delta",
                         "index": current_block_index,
@@ -577,11 +585,22 @@ impl ClaudeAdapter {
             let mut content_blocks = Vec::new();
             let mut output_tokens = 0u32;
 
-            if thinking_enabled {
+            let (parsed_think, parsed_visible) = if thinking_enabled {
+                let raw_tagged = if req.model.to_ascii_lowercase().contains("gemma4") {
+                    "<|think|>Reasoning internally before generating answer.<|/think|>Here is the response to your inquiry."
+                } else {
+                    "<think>Reasoning internally before generating answer.</think>Here is the response to your inquiry."
+                };
+                ThinkingTagParser::split_full_text(raw_tagged)
+            } else {
+                (None, "Here is the response to your inquiry.".to_owned())
+            };
+
+            if let Some(think_text) = parsed_think {
                 content_blocks.push(ClaudeContentBlock {
                     r#type: "thinking".to_owned(),
                     text: None,
-                    thinking: Some("Reasoning internally before generating answer.".to_owned()),
+                    thinking: Some(think_text),
                     id: None,
                     name: None,
                     input: None,
@@ -599,7 +618,7 @@ impl ClaudeAdapter {
             } else {
                 content_blocks.push(ClaudeContentBlock {
                     r#type: "text".to_owned(),
-                    text: Some("Here is the response to your inquiry.".to_owned()),
+                    text: Some(parsed_visible),
                     thinking: None,
                     id: None,
                     name: None,
@@ -924,5 +943,32 @@ impl ClaudeAdapter {
         }
 
         serde_json::Value::String(clean_prompt.to_owned())
+    }
+
+    /// Streams raw token chunks through [`ThinkingTagParser`], producing Anthropic Claude
+    /// `thinking_delta` (`<|think|>` / `<think>`) and `text_delta` event payloads.
+    #[must_use]
+    pub fn format_thinking_stream_events(token_chunks: &[&str]) -> Vec<serde_json::Value> {
+        let mut parser = ThinkingTagParser::new();
+        let mut deltas = Vec::new();
+        for chunk in token_chunks {
+            deltas.extend(parser.push(chunk));
+        }
+        deltas.extend(parser.finish());
+
+        deltas
+            .into_iter()
+            .filter_map(|delta| match delta {
+                ThinkingDelta::Thinking(t) if !t.is_empty() => Some(serde_json::json!({
+                    "type": "thinking_delta",
+                    "thinking": t
+                })),
+                ThinkingDelta::Content(c) if !c.is_empty() => Some(serde_json::json!({
+                    "type": "text_delta",
+                    "text": c
+                })),
+                _ => None,
+            })
+            .collect()
     }
 }

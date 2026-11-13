@@ -225,6 +225,36 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
+    // 9. Google Gemma 2, Gemma 3 & Gemma 4 family recipes ("gemma2", "gemma3", "gemma4")
+    let gemma_template = ChatTemplate::new(Some(
+        "<start_of_turn>user\n{{prompt}}<end_of_turn>\n<start_of_turn>model\n".to_owned(),
+    ));
+    let gemma_stop = SpecialTokens {
+        bos_token_id: Some(2),
+        eos_token_id: Some(1),
+        eot_token_id: Some(107),
+        add_bos_token: true,
+        stop_tokens: vec![1, 107],
+        stop_sequences: vec!["<end_of_turn>".to_owned(), "<eos>".to_owned()],
+        ..Default::default()
+    };
+
+    for arch in ["gemma2", "gemma3", "gemma4"] {
+        map.insert(
+            format!("{arch}@1.0.0"),
+            RecipeDescriptor {
+                architecture_id: arch,
+                recipe_version: "1.0.0",
+                supported_quants: &[
+                    "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+                ],
+                target_layouts: &["native", "ime_tile_8x16"],
+                default_chat_template: Some(gemma_template.clone()),
+                special_tokens: Some(gemma_stop.clone()),
+            },
+        );
+    }
+
     RwLock::new(map)
 });
 
@@ -690,5 +720,28 @@ mod tests {
             assert_eq!(desc.supported_quants, expected_quants);
             assert_eq!(desc.target_layouts, &["native", "ime_tile_8x16"]);
         }
+    }
+
+    #[test]
+    fn test_gemma_family_recipe_descriptors() {
+        for arch in ["gemma2", "gemma3", "gemma4"] {
+            assert!(
+                CapabilityFilter::is_supported(arch, "1.0.0"),
+                "CapabilityFilter must support {arch}@1.0.0"
+            );
+
+            let env = CapabilityFilter::align_prompt_environment(arch, "1.0.0")
+                .unwrap_or_else(|_| panic!("prompt alignment must succeed for {arch}"));
+            assert_eq!(env.architecture_id, arch);
+            assert_eq!(
+                env.chat_template.format_prompt("Explain RVV"),
+                "<start_of_turn>user\nExplain RVV<end_of_turn>\n<start_of_turn>model\n"
+            );
+            assert!(env.is_stop_token(1));
+            assert!(env.is_stop_token(107));
+        }
+
+        // Legacy gemma v1 remains intentionally uncompiled.
+        assert!(!CapabilityFilter::is_supported("gemma", "1.0.0"));
     }
 }
