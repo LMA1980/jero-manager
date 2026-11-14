@@ -200,13 +200,13 @@ impl SourceAdapter for HuggingFaceAdapter {
         progress_tx: Option<tokio::sync::mpsc::Sender<PullProgress>>,
     ) -> Result<PullArtifactSummary, IngestionError> {
         let simulated = self.simulated_failure.read().unwrap().clone();
-        if let Some(ref fault) = simulated {
-            if fault == "network_drop" {
-                let _ = fs::remove_file(staging_path);
-                return Err(IngestionError::NetworkError(
-                    "connection reset by peer during download".to_owned(),
-                ));
-            }
+        if let Some(ref fault) = simulated
+            && fault == "network_drop"
+        {
+            let _ = fs::remove_file(staging_path);
+            return Err(IngestionError::NetworkError(
+                "connection reset by peer during download".to_owned(),
+            ));
         }
 
         // Determine format: GGUF or SafeTensors
@@ -483,28 +483,28 @@ impl SourceAdapter for LocalFileAdapter {
         let model_dir = self.base_dir.join(model);
         let mut revisions = Vec::new();
 
-        if model_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&model_dir) {
-                for entry in entries.flatten() {
-                    let filename = entry.file_name().to_string_lossy().to_string();
-                    let path = entry.path();
-                    let size = fs::metadata(&path).map_or(0, |m| m.len());
-                    let digest = Sha256::digest_file(&path).unwrap_or_default();
-                    let format = if filename.ends_with(".gguf") {
-                        ModelFormat::Gguf
-                    } else if filename.ends_with(".safetensors") {
-                        ModelFormat::SafeTensors
-                    } else {
-                        ModelFormat::Custom("raw".to_owned())
-                    };
+        if model_dir.exists()
+            && let Ok(entries) = fs::read_dir(&model_dir)
+        {
+            for entry in entries.flatten() {
+                let filename = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+                let size = fs::metadata(&path).map_or(0, |m| m.len());
+                let digest = Sha256::digest_file(&path).unwrap_or_default();
+                let format = if filename.ends_with(".gguf") {
+                    ModelFormat::Gguf
+                } else if filename.ends_with(".safetensors") {
+                    ModelFormat::SafeTensors
+                } else {
+                    ModelFormat::Custom("raw".to_owned())
+                };
 
-                    revisions.push(ModelRevision {
-                        tag: filename,
-                        digest,
-                        size_bytes: size,
-                        format,
-                    });
-                }
+                revisions.push(ModelRevision {
+                    tag: filename,
+                    digest,
+                    size_bytes: size,
+                    format,
+                });
             }
         }
 

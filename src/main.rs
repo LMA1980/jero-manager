@@ -23,10 +23,10 @@ fn resolve_bind_addr() -> SocketAddr {
         }
     }
     // 2. Check PORT (e.g. "8080")
-    if let Ok(port_str) = std::env::var("PORT") {
-        if let Ok(port) = port_str.parse::<u16>() {
-            return SocketAddr::from(([127, 0, 0, 1], port));
-        }
+    if let Ok(port_str) = std::env::var("PORT")
+        && let Ok(port) = port_str.parse::<u16>()
+    {
+        return SocketAddr::from(([127, 0, 0, 1], port));
     }
     // 3. Default to 127.0.0.1:8080
     SocketAddr::from(([127, 0, 0, 1], 8080))

@@ -455,14 +455,13 @@ impl MultiModelScheduler {
         let is_unprofiled = tuning.is_none_or(|t| t.unprofiled);
 
         // Unprofiled models cannot enable dynamic idle core lending or borrowing (ADR-030, ADR-031)
-        if is_unprofiled {
-            if let Some(t) = tuning {
-                if t.lend_idle_cores || t.borrow_idle_cores {
-                    return Err(ManagerError::WorkerSpawn(format!(
-                        "unprofiled model '{model_id}' cannot enable dynamic idle core lending or borrowing (ADR-030)"
-                    )));
-                }
-            }
+        if is_unprofiled
+            && let Some(t) = tuning
+            && (t.lend_idle_cores || t.borrow_idle_cores)
+        {
+            return Err(ManagerError::WorkerSpawn(format!(
+                "unprofiled model '{model_id}' cannot enable dynamic idle core lending or borrowing (ADR-030)"
+            )));
         }
 
         let priority_class = tuning.map_or(PriorityClass::Throughput, |t| t.priority_class);

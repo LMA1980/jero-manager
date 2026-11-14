@@ -270,21 +270,20 @@ impl DecisionRouter {
             }
 
             // Fallback model check for structural constraint
-            if let Some(ref fallback) = config.fallback_model_id {
-                if active_loaded_models.iter().any(|m| m == fallback)
-                    && caps.get(fallback).is_some_and(|c| match constraint {
-                        StructuralConstraint::JsonObject | StructuralConstraint::JsonSchema(_) => {
-                            c.supports_json_schema || c.supports_grammar
-                        }
-                        StructuralConstraint::Grammar(_) => c.supports_grammar,
-                    })
-                {
-                    return Ok(RoutingDecision {
-                        selected_model: fallback.clone(),
-                        is_fallback: true,
-                        routing_reason: "structural_constraint_fallback".to_owned(),
-                    });
-                }
+            if let Some(ref fallback) = config.fallback_model_id
+                && active_loaded_models.iter().any(|m| m == fallback)
+                && caps.get(fallback).is_some_and(|c| match constraint {
+                    StructuralConstraint::JsonObject | StructuralConstraint::JsonSchema(_) => {
+                        c.supports_json_schema || c.supports_grammar
+                    }
+                    StructuralConstraint::Grammar(_) => c.supports_grammar,
+                })
+            {
+                return Ok(RoutingDecision {
+                    selected_model: fallback.clone(),
+                    is_fallback: true,
+                    routing_reason: "structural_constraint_fallback".to_owned(),
+                });
             }
 
             return Err(ManagerError::RoutingUnavailable {
@@ -296,23 +295,23 @@ impl DecisionRouter {
 
         // 4. Empty Prompt Handling (Tier 2 Boundary)
         if request.prompt.trim().is_empty() {
-            if let Some(ref def) = config.default_specialist_id {
-                if active_loaded_models.iter().any(|m| m == def) {
-                    return Ok(RoutingDecision {
-                        selected_model: def.clone(),
-                        is_fallback: false,
-                        routing_reason: "empty_prompt_default".to_owned(),
-                    });
-                }
+            if let Some(ref def) = config.default_specialist_id
+                && active_loaded_models.iter().any(|m| m == def)
+            {
+                return Ok(RoutingDecision {
+                    selected_model: def.clone(),
+                    is_fallback: false,
+                    routing_reason: "empty_prompt_default".to_owned(),
+                });
             }
-            if let Some(ref fb) = config.fallback_model_id {
-                if active_loaded_models.iter().any(|m| m == fb) {
-                    return Ok(RoutingDecision {
-                        selected_model: fb.clone(),
-                        is_fallback: true,
-                        routing_reason: "empty_prompt_fallback".to_owned(),
-                    });
-                }
+            if let Some(ref fb) = config.fallback_model_id
+                && active_loaded_models.iter().any(|m| m == fb)
+            {
+                return Ok(RoutingDecision {
+                    selected_model: fb.clone(),
+                    is_fallback: true,
+                    routing_reason: "empty_prompt_fallback".to_owned(),
+                });
             }
             return Ok(RoutingDecision {
                 selected_model: active_loaded_models[0].clone(),
@@ -329,23 +328,23 @@ impl DecisionRouter {
 
         // US-12 Scenario 3: When a decision router model is configured but offline,
         // divert immediately to operator fallback model or return RoutingUnavailable.
-        if let Some(ref router_id) = config.router_model_id {
-            if !router_is_active {
-                if let Some(ref fallback) = config.fallback_model_id {
-                    if active_loaded_models.iter().any(|m| m == fallback) {
-                        return Ok(RoutingDecision {
-                            selected_model: fallback.clone(),
-                            is_fallback: true,
-                            routing_reason: "operator_fallback".to_owned(),
-                        });
-                    }
-                }
-                return Err(ManagerError::RoutingUnavailable {
-                    reason: format!(
-                        "decision router not loaded and no fallback configured ({router_id} is offline)"
-                    ),
+        if let Some(ref router_id) = config.router_model_id
+            && !router_is_active
+        {
+            if let Some(ref fallback) = config.fallback_model_id
+                && active_loaded_models.iter().any(|m| m == fallback)
+            {
+                return Ok(RoutingDecision {
+                    selected_model: fallback.clone(),
+                    is_fallback: true,
+                    routing_reason: "operator_fallback".to_owned(),
                 });
             }
+            return Err(ManagerError::RoutingUnavailable {
+                reason: format!(
+                    "decision router not loaded and no fallback configured ({router_id} is offline)"
+                ),
+            });
         }
 
         // Evaluate domain via content-aware heuristic classifier
@@ -366,27 +365,26 @@ impl DecisionRouter {
         }
 
         // If router model is loaded, fallback to default specialist
-        if router_is_active {
-            if let Some(ref def) = config.default_specialist_id {
-                if active_loaded_models.iter().any(|m| m == def) {
-                    return Ok(RoutingDecision {
-                        selected_model: def.clone(),
-                        is_fallback: false,
-                        routing_reason: "router_default_specialist".to_owned(),
-                    });
-                }
-            }
+        if router_is_active
+            && let Some(ref def) = config.default_specialist_id
+            && active_loaded_models.iter().any(|m| m == def)
+        {
+            return Ok(RoutingDecision {
+                selected_model: def.clone(),
+                is_fallback: false,
+                routing_reason: "router_default_specialist".to_owned(),
+            });
         }
 
         // 6. Operator Fallback Model (US-12 Scenario 3)
-        if let Some(ref fallback) = config.fallback_model_id {
-            if active_loaded_models.iter().any(|m| m == fallback) {
-                return Ok(RoutingDecision {
-                    selected_model: fallback.clone(),
-                    is_fallback: true,
-                    routing_reason: "operator_fallback".to_owned(),
-                });
-            }
+        if let Some(ref fallback) = config.fallback_model_id
+            && active_loaded_models.iter().any(|m| m == fallback)
+        {
+            return Ok(RoutingDecision {
+                selected_model: fallback.clone(),
+                is_fallback: true,
+                routing_reason: "operator_fallback".to_owned(),
+            });
         }
 
         // 7. Missing Router & Missing/Offline Fallback -> Structured Error
@@ -422,10 +420,11 @@ impl DecisionRouter {
         }
 
         // Fallback to operator fallback model if distinct and active
-        if let Some(ref fb) = config.fallback_model_id {
-            if fb != current_model && active_loaded_models.iter().any(|m| m == fb) {
-                return Some(fb.clone());
-            }
+        if let Some(ref fb) = config.fallback_model_id
+            && fb != current_model
+            && active_loaded_models.iter().any(|m| m == fb)
+        {
+            return Some(fb.clone());
         }
 
         None

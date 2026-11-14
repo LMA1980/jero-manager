@@ -390,10 +390,10 @@ impl HealthSupervisor {
 
     /// Stops the watchdog thread cleanly.
     pub fn stop_watchdog(&mut self) {
-        if self.running.swap(false, Ordering::SeqCst) {
-            if let Some(handle) = self.watchdog_handle.take() {
-                let _ = handle.join();
-            }
+        if self.running.swap(false, Ordering::SeqCst)
+            && let Some(handle) = self.watchdog_handle.take()
+        {
+            let _ = handle.join();
         }
     }
 
@@ -523,20 +523,19 @@ impl HealthSupervisor {
                     let old_pid = ws.get_worker(&model_id).and_then(ManagedWorker::pid);
 
                     // Preempt/terminate runaway worker process: SIGTERM -> wait -> SIGKILL
-                    if let Some(worker) = ws.get_worker_mut(&model_id) {
+                    if let Some(worker) = ws.get_worker_mut(&model_id)
+                        && worker.is_alive()
+                    {
+                        let _ = worker.kill(libc::SIGTERM);
+                        // Also send SIGCONT so stopped/paused workers receive SIGTERM immediately
+                        let _ = worker.kill(libc::SIGCONT);
+                        let start_kill = Instant::now();
+                        while worker.is_alive() && start_kill.elapsed() < Duration::from_millis(50)
+                        {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
                         if worker.is_alive() {
-                            let _ = worker.kill(libc::SIGTERM);
-                            // Also send SIGCONT so stopped/paused workers receive SIGTERM immediately
-                            let _ = worker.kill(libc::SIGCONT);
-                            let start_kill = Instant::now();
-                            while worker.is_alive()
-                                && start_kill.elapsed() < Duration::from_millis(50)
-                            {
-                                std::thread::sleep(Duration::from_millis(5));
-                            }
-                            if worker.is_alive() {
-                                let _ = worker.kill(libc::SIGKILL);
-                            }
+                            let _ = worker.kill(libc::SIGKILL);
                         }
                     }
 

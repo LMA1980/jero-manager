@@ -80,45 +80,45 @@ pub(crate) fn evaluate_inline_guardrail_gate(
         ));
     }
 
-    if policy.audit_tool_calls {
-        if let Some((tool_name, args_json)) = tool_call {
-            let static_verdict =
-                audit_generated_tool_call(policy, tool_name, args_json).map_err(|err| {
-                    format!("fail-closed guardrail error during post-flight tool audit: {err}")
-                })?;
-            if !static_verdict.safe || static_verdict.risk_score >= policy.risk_threshold {
-                let category = static_verdict
-                    .category
-                    .unwrap_or_else(|| "TOOL_AUDIT_VIOLATION".to_owned());
-                return Err(format!(
-                    "post-flight tool call audit blocked '{tool_name}' (model={}, category={category}, risk_score={:.3})",
-                    static_verdict.model, static_verdict.risk_score
-                ));
-            }
-
-            let serialized = serde_json::json!({
-                "name": tool_name,
-                "arguments": args_json,
-            })
-            .to_string();
-            let runtime_req = GuardrailEvaluateRequest {
-                model: policy.model_id.clone(),
-                input: canonical_prompt.to_owned(),
-                tool_calls_json: Some(serialized),
-                threshold: Some(policy.risk_threshold),
-            };
-            let runtime_verdict = runtime.evaluate_guardrail(&runtime_req).map_err(|err| {
-                format!("fail-closed guardrail error during post-flight worker audit: {err}")
+    if policy.audit_tool_calls
+        && let Some((tool_name, args_json)) = tool_call
+    {
+        let static_verdict =
+            audit_generated_tool_call(policy, tool_name, args_json).map_err(|err| {
+                format!("fail-closed guardrail error during post-flight tool audit: {err}")
             })?;
-            if !runtime_verdict.safe || runtime_verdict.risk_score >= policy.risk_threshold {
-                let category = runtime_verdict
-                    .category
-                    .unwrap_or_else(|| "TOOL_AUDIT_VIOLATION".to_owned());
-                return Err(format!(
-                    "post-flight guardrail worker blocked '{tool_name}' (model={}, category={category}, risk_score={:.3})",
-                    runtime_verdict.model, runtime_verdict.risk_score
-                ));
-            }
+        if !static_verdict.safe || static_verdict.risk_score >= policy.risk_threshold {
+            let category = static_verdict
+                .category
+                .unwrap_or_else(|| "TOOL_AUDIT_VIOLATION".to_owned());
+            return Err(format!(
+                "post-flight tool call audit blocked '{tool_name}' (model={}, category={category}, risk_score={:.3})",
+                static_verdict.model, static_verdict.risk_score
+            ));
+        }
+
+        let serialized = serde_json::json!({
+            "name": tool_name,
+            "arguments": args_json,
+        })
+        .to_string();
+        let runtime_req = GuardrailEvaluateRequest {
+            model: policy.model_id.clone(),
+            input: canonical_prompt.to_owned(),
+            tool_calls_json: Some(serialized),
+            threshold: Some(policy.risk_threshold),
+        };
+        let runtime_verdict = runtime.evaluate_guardrail(&runtime_req).map_err(|err| {
+            format!("fail-closed guardrail error during post-flight worker audit: {err}")
+        })?;
+        if !runtime_verdict.safe || runtime_verdict.risk_score >= policy.risk_threshold {
+            let category = runtime_verdict
+                .category
+                .unwrap_or_else(|| "TOOL_AUDIT_VIOLATION".to_owned());
+            return Err(format!(
+                "post-flight guardrail worker blocked '{tool_name}' (model={}, category={category}, risk_score={:.3})",
+                runtime_verdict.model, runtime_verdict.risk_score
+            ));
         }
     }
 

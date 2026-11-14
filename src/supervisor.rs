@@ -653,13 +653,11 @@ impl ManagedWorker {
     /// # Errors
     /// Returns [`ManagerError`] on failure.
     pub fn shutdown(&mut self, graceful: bool) -> Result<(), ManagerError> {
-        if graceful {
-            if let Some(stream) = &self.stream {
-                let cmd = IpcMessage::ShutdownCommand(jero_core::ipc::protocol::ShutdownCommand {
-                    graceful: true,
-                });
-                let _ = send_msg_frame(stream, &cmd, None);
-            }
+        if graceful && let Some(stream) = &self.stream {
+            let cmd = IpcMessage::ShutdownCommand(jero_core::ipc::protocol::ShutdownCommand {
+                graceful: true,
+            });
+            let _ = send_msg_frame(stream, &cmd, None);
         }
         self.stream = None;
         if let Some(mut child) = self.child.take() {
@@ -1024,10 +1022,11 @@ fn spawn_and_attach_process(
     if socket_path.exists() {
         let _ = fs::remove_file(socket_path);
     }
-    if let Some(parent) = socket_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = socket_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)?;
     }
 
     let listener = UnixListener::bind(socket_path).map_err(|e| {

@@ -364,11 +364,11 @@ impl ModelAdmissionQueue {
     /// Emits periodic keep-alive heartbeats to all queued streaming requests.
     pub fn emit_keep_alives(&self) {
         for req in &self.queue {
-            if req.is_streaming {
-                if let Some(sse_tx) = &req.sse_sender {
-                    let frame = QueueSseFrame::KeepAlive.format_frame();
-                    let _ = sse_tx.try_send(frame);
-                }
+            if req.is_streaming
+                && let Some(sse_tx) = &req.sse_sender
+            {
+                let frame = QueueSseFrame::KeepAlive.format_frame();
+                let _ = sse_tx.try_send(frame);
             }
         }
     }

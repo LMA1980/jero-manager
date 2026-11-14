@@ -139,25 +139,25 @@ impl ClaudeAdapter {
                 return HttpResponse::error(400, json, Vec::new());
             }
 
-            if let Some(prev) = prev_role {
-                if prev == msg.role {
-                    let msg_text = if prev == "user" {
-                        "Invalid message sequence: consecutive user messages are not permitted"
-                            .to_owned()
-                    } else {
-                        "Invalid message sequence: consecutive assistant messages are not permitted"
-                            .to_owned()
-                    };
-                    let err = ClaudeErrorResponse {
-                        r#type: "error".to_owned(),
-                        error: ClaudeErrorDetails {
-                            r#type: "invalid_request_error".to_owned(),
-                            message: msg_text,
-                        },
-                    };
-                    let json = serde_json::to_string_pretty(&err).unwrap_or_default();
-                    return HttpResponse::error(400, json, Vec::new());
-                }
+            if let Some(prev) = prev_role
+                && prev == msg.role
+            {
+                let msg_text = if prev == "user" {
+                    "Invalid message sequence: consecutive user messages are not permitted"
+                        .to_owned()
+                } else {
+                    "Invalid message sequence: consecutive assistant messages are not permitted"
+                        .to_owned()
+                };
+                let err = ClaudeErrorResponse {
+                    r#type: "error".to_owned(),
+                    error: ClaudeErrorDetails {
+                        r#type: "invalid_request_error".to_owned(),
+                        message: msg_text,
+                    },
+                };
+                let json = serde_json::to_string_pretty(&err).unwrap_or_default();
+                return HttpResponse::error(400, json, Vec::new());
             }
             prev_role = Some(&msg.role);
         }
@@ -758,20 +758,20 @@ impl ClaudeAdapter {
         }
 
         // 2. Tools declaration schema
-        if let Some(tools) = &req.tools {
-            if !tools.is_empty() {
-                prompt.push_str("[Tools Available:\n");
-                for t in tools {
-                    prompt.push_str("- ");
-                    prompt.push_str(&t.name);
-                    if let Some(desc) = &t.description {
-                        prompt.push_str(": ");
-                        prompt.push_str(desc);
-                    }
-                    prompt.push('\n');
+        if let Some(tools) = &req.tools
+            && !tools.is_empty()
+        {
+            prompt.push_str("[Tools Available:\n");
+            for t in tools {
+                prompt.push_str("- ");
+                prompt.push_str(&t.name);
+                if let Some(desc) = &t.description {
+                    prompt.push_str(": ");
+                    prompt.push_str(desc);
                 }
-                prompt.push_str("]\n\n");
+                prompt.push('\n');
             }
+            prompt.push_str("]\n\n");
         }
 
         // 3. Conversation messages
@@ -919,19 +919,18 @@ impl ClaudeAdapter {
     ) -> serde_json::Value {
         let mut map = serde_json::Map::new();
 
-        if let Some(params) = schema {
-            if let Some(props) = params
+        if let Some(params) = schema
+            && let Some(props) = params
                 .get("properties")
                 .and_then(serde_json::Value::as_object)
-            {
-                for (prop_name, prop_schema) in props {
-                    let prop_type = prop_schema
-                        .get("type")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("string");
-                    let val = Self::extract_property_value(prompt, prop_name, prop_type);
-                    map.insert(prop_name.clone(), val);
-                }
+        {
+            for (prop_name, prop_schema) in props {
+                let prop_type = prop_schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("string");
+                let val = Self::extract_property_value(prompt, prop_name, prop_type);
+                map.insert(prop_name.clone(), val);
             }
         }
 

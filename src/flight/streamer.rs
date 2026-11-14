@@ -96,7 +96,7 @@ impl FlightTensorBatchStreamer {
         base_offset: u64,
         weights: &[i8],
     ) -> Result<RecordBatch, FlightError> {
-        if weights.is_empty() || weights.len() % IME_TILE_ELEMENTS != 0 {
+        if weights.is_empty() || !weights.len().is_multiple_of(IME_TILE_ELEMENTS) {
             return Err(FlightError::InvalidBatch(format!(
                 "weight length ({}) is not a multiple of IME tile size (128 bytes)",
                 weights.len()
@@ -111,7 +111,12 @@ impl FlightTensorBatchStreamer {
         let mut lengths = Vec::with_capacity(num_tiles);
         let mut weight_slices = Vec::with_capacity(num_tiles);
 
-        for (i, chunk) in weights.chunks_exact(IME_TILE_ELEMENTS).enumerate() {
+        for (i, chunk) in weights
+            .as_chunks::<IME_TILE_ELEMENTS>()
+            .0
+            .iter()
+            .enumerate()
+        {
             names.push(tensor_name);
             layers.push(layer_id);
             tiles.push(i as u32);

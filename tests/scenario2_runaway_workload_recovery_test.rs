@@ -223,19 +223,19 @@ fn test_scenario2_runaway_workload_recovery_e2e() {
                 new_pid,
                 generation,
             } = event.action
+                && old_pid == Some(initial_pid)
+                && generation >= 2
             {
-                if old_pid == Some(initial_pid) && generation >= 2 {
-                    worker_recovered = true;
-                    new_worker_pid = new_pid;
-                    assert!(
-                        event.reason.contains("timed out")
-                            || event.reason.contains("deadline")
-                            || event.reason.contains("heartbeat"),
-                        "audit event reason must indicate heartbeat deadline timeout, observed: '{}'",
-                        event.reason
-                    );
-                    break;
-                }
+                worker_recovered = true;
+                new_worker_pid = new_pid;
+                assert!(
+                    event.reason.contains("timed out")
+                        || event.reason.contains("deadline")
+                        || event.reason.contains("heartbeat"),
+                    "audit event reason must indicate heartbeat deadline timeout, observed: '{}'",
+                    event.reason
+                );
+                break;
             }
         }
         if worker_recovered {

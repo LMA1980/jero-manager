@@ -162,24 +162,23 @@ impl DerivedBlobManager {
         if let Ok(Some(existing)) =
             self.catalog
                 .get_derived_blob(source_digest, recipe_version, target_layout)
+            && existing.status == "valid"
         {
-            if existing.status == "valid" {
-                let derived_path = self.store.blobs_dir().join(&existing.derived_digest);
-                if derived_path.exists() {
-                    // Update access timestamp
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let _ = self
-                        .catalog
-                        .update_blob_access(&existing.derived_digest, now);
+            let derived_path = self.store.blobs_dir().join(&existing.derived_digest);
+            if derived_path.exists() {
+                // Update access timestamp
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let _ = self
+                    .catalog
+                    .update_blob_access(&existing.derived_digest, now);
 
-                    return Ok(DerivedResolution::Cached {
-                        derived_digest: existing.derived_digest,
-                        derived_path,
-                    });
-                }
+                return Ok(DerivedResolution::Cached {
+                    derived_digest: existing.derived_digest,
+                    derived_path,
+                });
             }
         }
 

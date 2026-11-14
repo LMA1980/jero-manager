@@ -591,10 +591,10 @@ impl OpenAiAdapter {
 
         // 1. Check if existing assistant messages contain tool_calls to pass through intact
         for m in &req.messages {
-            if let Some(tcs) = &m.tool_calls {
-                if let Some(tc) = tcs.first() {
-                    return Some(tc.clone());
-                }
+            if let Some(tcs) = &m.tool_calls
+                && let Some(tc) = tcs.first()
+            {
+                return Some(tc.clone());
             }
         }
 
@@ -705,19 +705,18 @@ impl OpenAiAdapter {
     ) -> String {
         let mut map = serde_json::Map::new();
 
-        if let Some(params) = parameters {
-            if let Some(props) = params
+        if let Some(params) = parameters
+            && let Some(props) = params
                 .get("properties")
                 .and_then(serde_json::Value::as_object)
-            {
-                for (prop_name, prop_schema) in props {
-                    let prop_type = prop_schema
-                        .get("type")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("string");
-                    let val = Self::extract_property_value(prompt, prop_name, prop_type);
-                    map.insert(prop_name.clone(), val);
-                }
+        {
+            for (prop_name, prop_schema) in props {
+                let prop_type = prop_schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("string");
+                let val = Self::extract_property_value(prompt, prop_name, prop_type);
+                map.insert(prop_name.clone(), val);
             }
         }
 

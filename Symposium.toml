@@ -12,3 +12,7 @@ source.cargo = "jero-tokenizer"
 [[plugins]]
 depends-on = ["mu-observable-ipc"]
 source.cargo = "mu-observable-ipc"
+
+[[plugins]]
+depends-on = ["mu-auth"]
+source.cargo = "mu-auth"

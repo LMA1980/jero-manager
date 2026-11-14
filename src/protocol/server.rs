@@ -305,10 +305,10 @@ impl ProtocolServer {
                 if let Some((name, val)) = line.split_once(':') {
                     let h_name = name.trim().to_owned();
                     let h_val = val.trim().to_owned();
-                    if h_name.eq_ignore_ascii_case("content-length") {
-                        if let Ok(cl) = h_val.parse::<usize>() {
-                            content_length = cl;
-                        }
+                    if h_name.eq_ignore_ascii_case("content-length")
+                        && let Ok(cl) = h_val.parse::<usize>()
+                    {
+                        content_length = cl;
                     }
                     headers.push((h_name, h_val));
                 }
