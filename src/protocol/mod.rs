@@ -6,6 +6,7 @@
 #![allow(clippy::doc_markdown)]
 
 pub mod claude;
+pub mod mr_endpoints;
 pub mod openai;
 pub mod server;
 pub mod types;
@@ -14,6 +15,17 @@ use crate::runtime::ControlPlaneRuntime;
 use jero_tokenizer::{ThinkingDelta, ThinkingStreamExtractor};
 
 pub use claude::ClaudeAdapter;
+pub use mr_endpoints::{
+    AuthClock, ENV_ALLOW_LOOPBACK_NO_SECRET, ENV_AUTH_HEADER_GUIDE, ENV_AUTH_POLICY_FILE,
+    ENV_MEMLOCK_CEILING_BYTES, ENV_OPENAI_BASE_URL, ENV_OPENAI_ROUTES, ENV_PROXY_SECRET,
+    ENV_PROXY_SECRET_FILE, ENV_WIREGUARD_ENDPOINT, ENV_WIREGUARD_INTERFACE_STATE,
+    ENV_WIREGUARD_STATUS_FILE, ENV_WIREGUARD_TUNNEL_CIDR, ModelRunnerAuthBundle,
+    ModelRunnerAuthPolicy, ModelRunnerConnectionConfig, ModelRunnerConnectionResponse,
+    ModelRunnerEndpointConfig, ModelRunnerStatusResponse, POLICY_MR_MODELS_READ,
+    POLICY_MR_OPENAI_API_READ, POLICY_MR_QUEUE_READ, POLICY_MR_WIREGUARD_VPN_READ,
+    RegisteredOperator, ResidentModelStatus, WireGuardPeerSummary, build_connection_response,
+    build_status_snapshot, handle_mr_connection, handle_mr_status, redact_public_key_prefix,
+};
 pub use openai::{OpenAiAdapter, audit_generated_tool_call};
 pub use server::{
     MAX_REQUEST_HEADERS_BYTES, ProtocolServer, ProtocolServerConfig, ServerError,

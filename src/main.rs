@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use jero_core::affinity::ControlPlaneCapacityConfig;
-use jero_manager::protocol::{ProtocolServer, ProtocolServerConfig};
+use jero_manager::protocol::{ModelRunnerEndpointConfig, ProtocolServer, ProtocolServerConfig};
 use jero_manager::runtime::{AdminCommand, ControlPlaneRuntime};
 
 fn resolve_bind_addr() -> SocketAddr {
@@ -63,17 +63,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    let server = ProtocolServer::new(config, runtime);
+    let server =
+        ProtocolServer::with_model_runner(config, runtime, ModelRunnerEndpointConfig::from_env());
     let listener = TcpListener::bind(bind_addr).await?;
     eprintln!("jero-manager daemon listening on http://{bind_addr}");
 
     loop {
         tokio::select! {
             accept_res = listener.accept() => {
-                let (stream, _) = accept_res?;
+                let (stream, peer_addr) = accept_res?;
                 let srv = server.clone();
                 tokio::spawn(async move {
-                    let _ = srv.handle_connection(stream).await;
+                    let _ = srv
+                        .handle_connection_with_peer(stream, Some(peer_addr.ip()))
+                        .await;
                 });
             }
             _ = tokio::signal::ctrl_c() => {

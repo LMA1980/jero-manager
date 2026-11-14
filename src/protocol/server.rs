@@ -12,7 +12,7 @@
 )]
 
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +21,9 @@ use tokio::net::TcpListener;
 
 use crate::error::ManagerError;
 use crate::protocol::claude::ClaudeAdapter;
+use crate::protocol::mr_endpoints::{
+    ModelRunnerAuthPolicy, ModelRunnerEndpointConfig, handle_mr_connection, handle_mr_status,
+};
 use crate::protocol::openai::OpenAiAdapter;
 use crate::protocol::types::{
     DEFAULT_MAX_REQUEST_BODY_BYTES, DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest,
@@ -97,18 +100,53 @@ impl From<std::io::Error> for ServerError {
     }
 }
 
-/// Protocol router and server dispatching requests to OpenAI and Claude endpoints.
+/// Protocol router and server dispatching requests to OpenAI, Claude, and role-gated Model-Runner endpoints.
 #[derive(Debug, Clone)]
 pub struct ProtocolServer {
     config: ProtocolServerConfig,
     runtime: Arc<ControlPlaneRuntime>,
+    mr_config: ModelRunnerEndpointConfig,
 }
 
 impl ProtocolServer {
-    /// Creates a new protocol server with the specified configuration and runtime.
+    /// Creates a new protocol server with default fail-closed `Model-Runner` endpoint auth.
     #[must_use]
     pub fn new(config: ProtocolServerConfig, runtime: Arc<ControlPlaneRuntime>) -> Self {
-        Self { config, runtime }
+        Self {
+            config,
+            runtime,
+            mr_config: ModelRunnerEndpointConfig::default(),
+        }
+    }
+
+    /// Creates a new protocol server with explicit [`ModelRunnerEndpointConfig`].
+    #[must_use]
+    pub fn with_model_runner(
+        config: ProtocolServerConfig,
+        runtime: Arc<ControlPlaneRuntime>,
+        mr_config: ModelRunnerEndpointConfig,
+    ) -> Self {
+        Self {
+            config,
+            runtime,
+            mr_config,
+        }
+    }
+
+    /// Replaces the active `Model-Runner` endpoint configuration.
+    pub fn set_model_runner_config(&mut self, mr_config: ModelRunnerEndpointConfig) {
+        self.mr_config = mr_config;
+    }
+
+    /// Replaces only the `Model-Runner` authorization policy.
+    pub fn set_mr_auth_policy(&mut self, auth: ModelRunnerAuthPolicy) {
+        self.mr_config.auth = auth;
+    }
+
+    /// Accesses the active `Model-Runner` endpoint configuration.
+    #[must_use]
+    pub const fn mr_config(&self) -> &ModelRunnerEndpointConfig {
+        &self.mr_config
     }
 
     /// Accesses the server configuration.
@@ -123,8 +161,18 @@ impl ProtocolServer {
         &self.runtime
     }
 
-    /// Routes an HTTP request frame to the appropriate protocol adapter.
+    /// Routes an HTTP request frame without an associated peer IP address (`None`).
     pub async fn route_request(&self, req: HttpRequest) -> HttpResponse {
+        self.route_request_with_peer(req, None).await
+    }
+
+    /// Routes an HTTP request frame to the appropriate protocol adapter, passing verified socket `peer_ip`
+    /// to `mu-auth`'s edge proxy verifier for `/api/mr/v1/*` routes.
+    pub async fn route_request_with_peer(
+        &self,
+        req: HttpRequest,
+        peer_ip: Option<IpAddr>,
+    ) -> HttpResponse {
         // Enforce maximum body size check
         if req.body.len() > self.config.max_request_body_bytes {
             let json = serde_json::json!({
@@ -154,6 +202,10 @@ impl ProtocolServer {
             ClaudeAdapter::handle_http(req, Arc::clone(&self.runtime)).await
         } else if path == "/v1/guardrail/evaluate" || path == "/guardrail/evaluate" {
             handle_guardrail_evaluate(req, Arc::clone(&self.runtime)).await
+        } else if path == "/api/mr/v1/status" {
+            handle_mr_status(&req, peer_ip, &self.runtime, &self.mr_config)
+        } else if path == "/api/mr/v1/connection" {
+            handle_mr_connection(&req, peer_ip, &self.mr_config)
         } else {
             let json = serde_json::json!({
                 "error": {
@@ -172,9 +224,27 @@ impl ProtocolServer {
     /// Reads HTTP request line, headers (up to 64KB bound), and body (up to 10MB bound),
     /// routes to the appropriate handler, and writes back the serialized response.
     ///
+    /// Handles a single incoming async stream using an optional verified peer IP (`None` fails closed
+    /// on loopback-only fallback unless a valid `X-Proxy-Secret` is supplied).
+    ///
     /// # Errors
     /// Returns [`ServerError`] on socket I/O, timeout, or boundary violations.
-    pub async fn handle_connection<S>(&self, mut stream: S) -> Result<(), ServerError>
+    pub async fn handle_connection<S>(&self, stream: S) -> Result<(), ServerError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        self.handle_connection_with_peer(stream, None).await
+    }
+
+    /// Handles a single incoming async stream with explicit `peer_ip` attribution.
+    ///
+    /// # Errors
+    /// Returns [`ServerError`] on socket I/O, timeout, or boundary violations.
+    pub async fn handle_connection_with_peer<S>(
+        &self,
+        mut stream: S,
+        peer_ip: Option<IpAddr>,
+    ) -> Result<(), ServerError>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -292,7 +362,7 @@ impl ProtocolServer {
         };
 
         // 2. Route request and write response
-        let resp = self.route_request(req).await;
+        let resp = self.route_request_with_peer(req, peer_ip).await;
         self.write_http_response(&mut stream, resp).await?;
         Ok(())
     }
@@ -309,6 +379,7 @@ impl ProtocolServer {
         let status_reason = match resp.status {
             200 => "OK",
             400 => "Bad Request",
+            401 => "Unauthorized",
             403 => "Forbidden",
             404 => "Not Found",
             405 => "Method Not Allowed",
@@ -378,10 +449,12 @@ impl ProtocolServer {
 
         let listener = TcpListener::bind(addr).await?;
         loop {
-            let (socket, _) = listener.accept().await?;
+            let (socket, peer_addr) = listener.accept().await?;
             let server_clone = self.clone();
             tokio::spawn(async move {
-                let _ = server_clone.handle_connection(socket).await;
+                let _ = server_clone
+                    .handle_connection_with_peer(socket, Some(peer_addr.ip()))
+                    .await;
             });
         }
     }

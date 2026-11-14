@@ -3,7 +3,7 @@ name = "jero-manager"
 description = "Control plane and IPC daemon for the SpacemiT K3 AI platform"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 license = "AGPL-3.0-only"
 repository = "https://github.com/LMA1980/jero-manager"
 default-run = "jero-manager"
@@ -33,6 +33,7 @@ jero-core = { version = "0.1.0", git = "https://github.com/LMA1980/jero-core.git
 jero-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/jero-tokenizer.git", branch = "main" }
 jero-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kernels-rvv.git", branch = "main" }
 mu-observable-ipc = { version = "0.1.0", git = "https://github.com/LMA1980/mu-observable-ipc.git", branch = "main" }
+mu-auth = { version = "0.1.0", git = "https://github.com/LMA1980/mu-auth.git", branch = "main", features = ["github-oauth"] }
 arrow-array = "59.3.1"
 arrow-buffer = "59.3.1"
 arrow-schema = "59.3.1"
