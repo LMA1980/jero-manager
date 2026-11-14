@@ -715,3 +715,43 @@ pub struct ClaudeErrorResponse {
     /// Error object details.
     pub error: ClaudeErrorDetails,
 }
+
+/// Fail-closed pre-flight / post-flight guardrail policy configuration (`#35`, `#36`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuardrailPolicy {
+    /// Logical identifier of the active guardrail scanner model (e.g. `"prompt-guard-279m"`).
+    pub model_id: String,
+    /// Inclusive risk threshold in `(0.0, 1.0]` at or above which requests fail closed.
+    pub risk_threshold: f32,
+    /// Whether generated `tool_calls` / `tool_use` payloads are audited post-flight.
+    pub audit_tool_calls: bool,
+}
+
+/// Request payload for `POST /v1/guardrail/evaluate` (`#39`, `#40`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuardrailEvaluateRequest {
+    /// Logical identifier of the registered guardrail scanner model.
+    pub model: String,
+    /// Input prompt or text payload to inspect.
+    pub input: String,
+    /// Optional serialized JSON tool-call payload to audit alongside or independently of `input`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls_json: Option<String>,
+    /// Optional risk threshold override in `(0.0, 1.0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f32>,
+}
+
+/// Verdict payload returned by `POST /v1/guardrail/evaluate` and inline guardrail hooks (`#39`, `#40`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuardrailEvaluateResponse {
+    /// `true` iff risk score is strictly below threshold and no hazard category matched.
+    pub safe: bool,
+    /// Calibrated probability-like risk score in `[0.0, 1.0]`.
+    pub risk_score: f32,
+    /// Hazard classification label when triggered (e.g. `"INJECTION"`, `"JAILBREAK"`, `"S14"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Guardrail model identifier that produced the verdict.
+    pub model: String,
+}

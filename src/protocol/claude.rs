@@ -22,7 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use jero_core::error::K3Error;
 use jero_tokenizer::ThinkingDelta;
 
+use crate::prompt::normalize_guardrail_input;
 use crate::protocol::ThinkingTagParser;
+pub use crate::protocol::openai::audit_generated_tool_call;
 use crate::protocol::types::{
     ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse,
     ClaudeMessageRequest, ClaudeMessageResponse, ClaudeUsage, HttpRequest, HttpResponse,
@@ -176,8 +178,9 @@ impl ClaudeAdapter {
         let entry = model_entry.unwrap();
         let n_ctx = entry.n_ctx;
 
-        // 3. Canonical prompt translation (`UnifiedPrompt`)
-        let canonical_prompt = Self::translate_to_canonical_prompt(&req);
+        // 3. Canonical prompt translation (`UnifiedPrompt`) + UTF-8 guardrail normalization
+        let canonical_prompt =
+            normalize_guardrail_input(&Self::translate_to_canonical_prompt(&req));
 
         // 4. Tokenization & Context Window Admission Bounds check (ADR-027, US-24 Scenario 3)
         let token_count = match runtime.dispatch_tokenize_prompt(
@@ -241,6 +244,38 @@ impl ClaudeAdapter {
 
         // Detect tool calling pass-through (US-24 Scenario 2)
         let tool_call_trigger = Self::detect_tool_call_passthrough(&req);
+
+        // 5b. Fail-closed inline guardrail gate (pre-flight prompt + post-flight tool_use audit)
+        if let Some(policy) = runtime.guardrail_policy() {
+            let tool_owned = tool_call_trigger.as_ref().map(|tool_use| {
+                let name = tool_use.name.as_deref().unwrap_or("").to_owned();
+                let args_json = tool_use
+                    .input
+                    .as_ref()
+                    .map_or_else(|| "{}".to_owned(), ToString::to_string);
+                (name, args_json)
+            });
+            let tool_info = tool_owned
+                .as_ref()
+                .map(|(name, args)| (name.as_str(), args.as_str()));
+            if let Err(reason) = crate::protocol::evaluate_inline_guardrail_gate(
+                &runtime,
+                &policy,
+                &canonical_prompt,
+                tool_info,
+            ) {
+                let err = ClaudeErrorResponse {
+                    r#type: "error".to_owned(),
+                    error: ClaudeErrorDetails {
+                        r#type: "security_policy_violation".to_owned(),
+                        message: reason,
+                    },
+                };
+                let json = serde_json::to_string_pretty(&err).unwrap_or_default();
+                return HttpResponse::error(403, json, Vec::new());
+            }
+        }
+
         let thinking_enabled = req.thinking.as_ref().is_some_and(|t| t.r#type == "enabled");
 
         if is_streaming {

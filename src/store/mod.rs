@@ -16,6 +16,7 @@ pub use derived::{
 };
 pub use filter::{
     AlignedPromptEnvironment, CandidateSuitability, CapabilityFilter, RecipeDescriptor,
+    parse_llamaguard_hazard,
 };
 pub use gc::{
     BlobUsageInfo, GcReport, HighWaterMarkWarning, MockProcMapsScanner, ProcessMappingInfo,

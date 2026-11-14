@@ -43,18 +43,19 @@ pub use store::{
     ENV_STORE_ROOT, GcReport, HighWaterMarkWarning, MAX_PATH_COMPONENT_LEN, MockProcMapsScanner,
     ModelManifest, ProcessMappingInfo, ProcessMapsScanner, RealProcMapsScanner, RecipeDescriptor,
     ResolvedAlias, RetentionPolicy, Sha256, StaleRecipeOutcome, StorageGarbageCollector,
-    check_derived_memory_admission, hex_encode, parse_alias_id, repack_phi3_fused_tensor_ime_8x16,
-    validate_path_component,
+    check_derived_memory_admission, hex_encode, parse_alias_id, parse_llamaguard_hazard,
+    repack_phi3_fused_tensor_ime_8x16, validate_path_component,
 };
 
 pub use protocol::{
     ClaudeAdapter, ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse,
     ClaudeMessage, ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem, ClaudeThinkingConfig,
-    ClaudeTool, ClaudeUsage, OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
-    OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
-    OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage,
-    OpenAiStop, OpenAiTool, OpenAiToolCall, OpenAiUsage, ProtocolServer, ProtocolServerConfig,
-    ThinkingTagParser,
+    ClaudeTool, ClaudeUsage, GuardrailEvaluateRequest, GuardrailEvaluateResponse, GuardrailPolicy,
+    OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice,
+    OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunction,
+    OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage, OpenAiStop, OpenAiTool,
+    OpenAiToolCall, OpenAiUsage, ProtocolServer, ProtocolServerConfig, ThinkingTagParser,
+    audit_generated_tool_call, handle_guardrail_evaluate,
 };
 
 pub use capacity::{
@@ -103,7 +104,8 @@ pub use prompt::{
     SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
     XLAM_TOOL_CALL_TOKEN, evaluate_stop_token, format_chat_prompt, format_dory_chatml_prompt,
     format_functiongemma_prompt, format_octopus_prompt, format_xlam_prompt,
-    is_functional_action_token, resolve_dory_loop_budget, validate_and_tokenize,
+    is_functional_action_token, normalize_guardrail_input, resolve_dory_loop_budget,
+    validate_and_tokenize,
 };
 pub use queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_ESTIMATED_PASS_LATENCY_MS,
@@ -118,8 +120,8 @@ pub use router::{
 };
 pub use runtime::{
     ActiveTaskRecord, AdminCommand, AdminResponse, ControlPlaneRuntime, DEFAULT_CONTROL_TASK_LEASE,
-    ModelAuditEvent, ModelAuditEventType, ModelPlacementRecord, TaskLeaseSnapshot,
-    WorkerHealthSnapshot,
+    GuardrailEvaluatorFn, ModelAuditEvent, ModelAuditEventType, ModelPlacementRecord,
+    TaskLeaseSnapshot, WorkerHealthSnapshot,
 };
 pub use scheduler::{
     DEFAULT_MAX_ACTIVE_MODELS, ModelExecutionMetrics, ModelSchedulerEntry, ModelSchedulingState,

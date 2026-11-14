@@ -255,8 +255,8 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         );
     }
 
-    // 10. Single-pass zero-KV bidirectional encoder classifiers ("modernbert", "bert", "deberta-v3")
-    for arch in ["modernbert", "bert", "deberta-v3"] {
+    // 10. Single-pass zero-KV bidirectional encoder classifiers ("modernbert", "bert")
+    for arch in ["modernbert", "bert"] {
         map.insert(
             format!("{arch}@1.0.0"),
             RecipeDescriptor {
@@ -271,6 +271,99 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
             },
         );
     }
+
+    // 10b. Security scanner & guardrail recipes ("deberta-v3", "granite", "shieldgemma", "llama-guard")
+    // enforcing minimum Q8_0 precision floor (4-bit security classifiers rejected at admission), plus "foundation-sec".
+    map.insert(
+        "deberta-v3@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "deberta-v3",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: None,
+            special_tokens: None,
+        },
+    );
+
+    let granite_template = ChatTemplate::new(Some(
+        "<|start_of_role|>guardian_policy<|end_of_role|>Harm Engagement<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>{{prompt}}<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>".to_owned(),
+    ));
+    let granite_tokens = SpecialTokens {
+        bos_token_id: Some(0),
+        eos_token_id: Some(2),
+        add_bos_token: false,
+        stop_tokens: vec![2],
+        stop_sequences: vec!["<|end_of_text|>".to_owned()],
+        ..Default::default()
+    };
+    map.insert(
+        "granite@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "granite",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(granite_template),
+            special_tokens: Some(granite_tokens),
+        },
+    );
+
+    let shieldgemma_template = ChatTemplate::new(Some(
+        "You are a policy expert trying to help determine whether a user prompt is in violation of the defined safety policies.\n\n<start_of_turn>\nHuman Question: {{prompt}}\n<end_of_turn>\n\nDoes the human question violate the above principle? Your answer must start with 'Yes' or 'No'.".to_owned(),
+    ));
+    map.insert(
+        "shieldgemma@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "shieldgemma",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(shieldgemma_template),
+            special_tokens: Some(gemma_stop),
+        },
+    );
+
+    let llamaguard_template = ChatTemplate::new(Some(
+        "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nTask: Check if there is unsafe content in 'User' messages in conversations according our safety policy with the below categories.\n\n<BEGIN UNSAFE CONTENT CATEGORIES>\nS1: Violent Crimes.\nS2: Non-Violent Crimes.\nS3: Sex Crimes.\nS4: Child Exploitation.\nS5: Defamation.\nS6: Specialized Advice.\nS7: Privacy.\nS8: Intellectual Property.\nS9: Indiscriminate Weapons.\nS10: Hate.\nS11: Self-Harm.\nS12: Sexual Content.\nS13: Elections.\nS14: Code Interpreter Abuse.\n<END UNSAFE CONTENT CATEGORIES>\n\n<BEGIN CONVERSATION>\n\nUser: {{prompt}}\n\n<END CONVERSATION>\n\nProvide your safety assessment for ONLY THE LAST User message in the above conversation:\n - First line must read 'safe' or 'unsafe'.\n - If unsafe, a second line must include a comma-separated list of violated categories.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n".to_owned(),
+    ));
+    let llamaguard_tokens = SpecialTokens {
+        bos_token_id: Some(128_000),
+        eos_token_id: Some(128_001),
+        eot_token_id: Some(128_009),
+        add_bos_token: true,
+        stop_tokens: vec![128_001, 128_009],
+        stop_sequences: vec!["<|eot_id|>".to_owned()],
+        ..Default::default()
+    };
+    map.insert(
+        "llama-guard@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "llama-guard",
+            recipe_version: "1.0.0",
+            supported_quants: &["Q8_0", "F16", "BF16", "F32"],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(llamaguard_template),
+            special_tokens: Some(llamaguard_tokens.clone()),
+        },
+    );
+
+    let foundation_sec_template = ChatTemplate::new(Some(
+        "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{{prompt}}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n".to_owned(),
+    ));
+    map.insert(
+        "foundation-sec@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "foundation-sec",
+            recipe_version: "1.0.0",
+            supported_quants: &[
+                "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+            ],
+            target_layouts: &["native", "ime_tile_8x16"],
+            default_chat_template: Some(foundation_sec_template),
+            special_tokens: Some(llamaguard_tokens),
+        },
+    );
 
     // 11. Functional-token & action SLMs ("functiongemma", "octopus", "xlam") enforcing Q8_0 / native i8 floor
     let functiongemma_template = ChatTemplate::new(Some(
@@ -409,6 +502,80 @@ impl AlignedPromptEnvironment {
     }
 }
 
+/// Parses Llama-Guard text output into `(is_safe, hazard_category)` using strict `MLCommons` `S1..S14` fail-closed rules.
+///
+/// Returns `(true, None)` if and only if the first non-empty line is `"safe"` (case-insensitive)
+/// with no trailing non-empty lines. Returns `(false, Some("S1".."S14"))` when the first line
+/// is `"unsafe"` followed by one or more valid `MLCommons` codes, and fails closed as `(false, None)`
+/// on empty, truncated, or malformed output.
+#[must_use]
+pub fn parse_llamaguard_hazard(text: &str) -> (bool, Option<String>) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return (false, None);
+    }
+
+    let mut lines = trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let Some(verdict) = lines.next() else {
+        return (false, None);
+    };
+
+    if verdict.eq_ignore_ascii_case("safe") {
+        return if lines.next().is_none() {
+            (true, None)
+        } else {
+            (false, None)
+        };
+    }
+
+    if !verdict.eq_ignore_ascii_case("unsafe") {
+        return (false, None);
+    }
+
+    for rest_line in lines {
+        for raw_token in rest_line.split([',', ' ', '\t']) {
+            let token = raw_token.trim();
+            if token.is_empty() {
+                continue;
+            }
+            if let Some(num_str) = token.strip_prefix(['S', 's']) {
+                if let Ok(code) = num_str.parse::<u8>() {
+                    if (1..=14).contains(&code) {
+                        return (false, Some(format!("S{code}")));
+                    }
+                }
+            }
+        }
+    }
+
+    (false, None)
+}
+
+fn format_quant_rejection_reason(desc: &RecipeDescriptor, key: &str, quantization: &str) -> String {
+    if matches!(desc.architecture_id, "functiongemma" | "octopus" | "xlam") {
+        format!(
+            "quantization format '{}' is not supported by recipe '{}': sub-1B action SLM requires minimum Q8_0 / native i8 IME precision floor (supported: {:?})",
+            quantization, key, desc.supported_quants
+        )
+    } else if matches!(
+        desc.architecture_id,
+        "deberta-v3" | "granite" | "shieldgemma" | "llama-guard"
+    ) {
+        format!(
+            "quantization format '{}' is not supported by recipe '{}': security scanner requires minimum Q8_0 precision floor (supported: {:?})",
+            quantization, key, desc.supported_quants
+        )
+    } else {
+        format!(
+            "quantization format '{}' is not supported by recipe '{}' (supported: {:?})",
+            quantization, key, desc.supported_quants
+        )
+    }
+}
+
 /// Architecture Recipe Capability Filter engine.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CapabilityFilter;
@@ -454,20 +621,7 @@ impl CapabilityFilter {
                     .any(|q| q.eq_ignore_ascii_case(&manifest.quantization));
 
                 if !quant_supported {
-                    let reason = if matches!(
-                        desc.architecture_id,
-                        "functiongemma" | "octopus" | "xlam"
-                    ) {
-                        format!(
-                            "quantization format '{}' is not supported by recipe '{}': sub-1B action SLM requires minimum Q8_0 / native i8 IME precision floor (supported: {:?})",
-                            manifest.quantization, key, desc.supported_quants
-                        )
-                    } else {
-                        format!(
-                            "quantization format '{}' is not supported by recipe '{}' (supported: {:?})",
-                            manifest.quantization, key, desc.supported_quants
-                        )
-                    };
+                    let reason = format_quant_rejection_reason(desc, &key, &manifest.quantization);
                     CandidateSuitability {
                         executable: false,
                         architecture_id: manifest.architecture_id.clone(),
@@ -570,20 +724,9 @@ impl CapabilityFilter {
             .any(|q| q.eq_ignore_ascii_case(&manifest.quantization));
 
         if !quant_supported {
-            let reason = if matches!(desc.architecture_id, "functiongemma" | "octopus" | "xlam") {
-                format!(
-                    "quantization format '{}' is not supported by recipe '{}': sub-1B action SLM requires minimum Q8_0 / native i8 IME precision floor (supported: {:?})",
-                    manifest.quantization, key, desc.supported_quants
-                )
-            } else {
-                format!(
-                    "quantization format '{}' is not supported by recipe '{}' (supported: {:?})",
-                    manifest.quantization, key, desc.supported_quants
-                )
-            };
             return Err(K3Error::CapabilityMismatch {
                 architecture: manifest.architecture_id.clone(),
-                reason,
+                reason: format_quant_rejection_reason(desc, &key, &manifest.quantization),
             });
         }
 
@@ -921,5 +1064,118 @@ mod tests {
                 assert!(suit.quantization_supported);
             }
         }
+    }
+
+    #[test]
+    fn test_security_scanner_q8_0_floor() {
+        for arch in ["deberta-v3", "granite", "shieldgemma", "llama-guard"] {
+            assert!(
+                CapabilityFilter::is_supported(arch, "1.0.0"),
+                "{arch}@1.0.0 must be compiled"
+            );
+
+            for rejected_quant in ["Q4_0", "Q4_K_M", "Q5_K", "Q6_K"] {
+                let manifest = ModelManifest::new(
+                    "gguf",
+                    arch,
+                    "1.0.0",
+                    rejected_quant,
+                    2048,
+                    "sha256:sec-rejected",
+                    279_000_000,
+                );
+                let suit = CapabilityFilter::evaluate_candidate(&manifest);
+                assert!(!suit.executable, "{arch} must reject {rejected_quant}");
+                assert!(!suit.quantization_supported);
+                let reason = suit.reason.expect("security precision floor reason");
+                assert!(reason.contains("Q8_0"));
+                assert!(reason.contains("precision floor"));
+
+                let err = CapabilityFilter::validate_model_manifest(&manifest)
+                    .expect_err("4-bit security scanner must fail upfront validation");
+                assert!(err.to_string().contains("Q8_0"));
+            }
+
+            for accepted_quant in ["Q8_0", "F16", "BF16", "F32"] {
+                let manifest = ModelManifest::new(
+                    "gguf",
+                    arch,
+                    "1.0.0",
+                    accepted_quant,
+                    2048,
+                    "sha256:sec-accepted",
+                    279_000_000,
+                );
+                let suit = CapabilityFilter::evaluate_candidate(&manifest);
+                assert!(suit.executable, "{arch} must accept {accepted_quant}");
+                assert!(suit.quantization_supported);
+                assert!(CapabilityFilter::validate_model_manifest(&manifest).is_ok());
+            }
+        }
+
+        // Foundation-Sec-8B allows 4-bit Q4_K_M alongside Q8_0 as a primary cyber-defense LLM
+        for quant in ["Q4_K_M", "Q8_0"] {
+            let fsec = ModelManifest::new(
+                "gguf",
+                "foundation-sec",
+                "1.0.0",
+                quant,
+                4096,
+                "sha256:foundation-sec",
+                4_800_000_000,
+            );
+            assert!(CapabilityFilter::evaluate_candidate(&fsec).executable);
+            assert!(CapabilityFilter::validate_model_manifest(&fsec).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_llamaguard_and_granite_guardian_templates() {
+        let granite = CapabilityFilter::align_prompt_environment("granite", "1.0.0")
+            .expect("granite prompt alignment succeeds");
+        let granite_prompt = granite.chat_template.format_prompt("Scan this input");
+        assert!(granite_prompt.contains("<|start_of_role|>guardian_policy<|end_of_role|>"));
+        assert!(granite_prompt.contains("Scan this input"));
+        assert!(granite.is_stop_token(2));
+
+        let shield = CapabilityFilter::align_prompt_environment("shieldgemma", "1.0.0")
+            .expect("shieldgemma prompt alignment succeeds");
+        let shield_prompt = shield.chat_template.format_prompt("Check prompt safety");
+        assert!(shield_prompt.contains("Human Question: Check prompt safety"));
+        assert!(shield_prompt.contains("Your answer must start with 'Yes' or 'No'"));
+        assert!(shield.is_stop_token(107));
+
+        let lguard = CapabilityFilter::align_prompt_environment("llama-guard", "1.0.0")
+            .expect("llama-guard prompt alignment succeeds");
+        let lguard_prompt = lguard.chat_template.format_prompt("Evaluate payload");
+        assert!(lguard_prompt.contains("S14: Code Interpreter Abuse."));
+        assert!(lguard_prompt.contains("Evaluate payload"));
+        assert!(lguard.is_stop_token(128_009));
+
+        let fsec = CapabilityFilter::align_prompt_environment("foundation-sec", "1.0.0")
+            .expect("foundation-sec prompt alignment succeeds");
+        assert!(
+            fsec.chat_template
+                .format_prompt("Triage CVE")
+                .contains("Triage CVE")
+        );
+
+        assert_eq!(parse_llamaguard_hazard("safe"), (true, None));
+        assert_eq!(parse_llamaguard_hazard("  SAFE \n"), (true, None));
+        for code in 1..=14 {
+            let expected = format!("S{code}");
+            assert_eq!(
+                parse_llamaguard_hazard(&format!("unsafe\n{expected}")),
+                (false, Some(expected))
+            );
+        }
+        assert_eq!(
+            parse_llamaguard_hazard("unsafe\ns2, S14"),
+            (false, Some("S2".to_owned()))
+        );
+        assert_eq!(parse_llamaguard_hazard("unsafe\nS99"), (false, None));
+        assert_eq!(parse_llamaguard_hazard(""), (false, None));
+        assert_eq!(parse_llamaguard_hazard("safe\nextra-line"), (false, None));
+        assert_eq!(parse_llamaguard_hazard("corrupted"), (false, None));
     }
 }

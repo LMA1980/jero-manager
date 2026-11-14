@@ -22,8 +22,11 @@ use std::thread;
 use std::time::Duration;
 
 use jero_core::affinity::{ControlPlaneCapacityConfig, ResolvedControlCapacity};
+use jero_manager::BOUNDED_MEMLOCK_CEILING_BYTES;
 use jero_manager::error::ManagerError;
 use jero_manager::scheduler::MultiModelScheduler;
+use jero_manager::store::{CapabilityFilter, ModelManifest};
+use jero_manager::telemetry::estimate_bounded_kv_memlock_kb;
 
 fn setup_capacity() -> ResolvedControlCapacity {
     ControlPlaneCapacityConfig::default()
@@ -293,5 +296,89 @@ fn test_scenario5_three_models_cluster_coexistence() {
     assert_eq!(scheduler.running_cores_mask(), 0xFF00);
 
     scheduler.record_pass_completion(&accelerated_permit, 10.0, 2.0, 10);
+    assert_eq!(scheduler.running_cores_mask(), 0x0000);
+}
+
+#[test]
+fn test_x100_prompt_guard_and_a100_foundation_sec_8b_coexistence_under_memlock() {
+    // 1. Validate recipe capability admission for zero-KV Q8_0 X100 scanner + Q4_K_M A100 8B primary LLM
+    let scanner_manifest = ModelManifest::new(
+        "gguf",
+        "deberta-v3",
+        "1.0.0",
+        "Q8_0",
+        64,
+        "sha256:prompt-guard-279m",
+        295_000_000,
+    );
+    let primary_manifest = ModelManifest::new(
+        "gguf",
+        "foundation-sec",
+        "1.0.0",
+        "Q4_K_M",
+        64,
+        "sha256:foundation-sec-8b",
+        4_850_000_000,
+    );
+    assert!(CapabilityFilter::validate_model_manifest(&scanner_manifest).is_ok());
+    assert!(CapabilityFilter::validate_model_manifest(&primary_manifest).is_ok());
+
+    // 2. Verify disjoint X100 (cores 0-3 / 0x000F) vs A100 (cores 8-15 / 0xFF00) execution without contention
+    let capacity = setup_capacity();
+    let scheduler = MultiModelScheduler::new(capacity);
+    let x100_guardrail_mask: u64 = 0x000F;
+    let a100_primary_mask: u64 = 0xFF00;
+    assert_eq!(x100_guardrail_mask & a100_primary_mask, 0);
+
+    scheduler
+        .admit_or_register_model(
+            "prompt-guard-279m",
+            "x100".to_owned(),
+            x100_guardrail_mask,
+            None,
+        )
+        .expect("admit X100 Prompt-Guard-279M");
+    scheduler
+        .admit_or_register_model(
+            "foundation-sec-8b",
+            "a100".to_owned(),
+            a100_primary_mask,
+            None,
+        )
+        .expect("admit A100 Foundation-Sec-8B");
+
+    let scanner_pass = scheduler
+        .try_schedule_forward_pass("prompt-guard-279m")
+        .expect("schedule scanner")
+        .expect("scanner pass granted without queuing");
+    let primary_pass = scheduler
+        .try_schedule_forward_pass("foundation-sec-8b")
+        .expect("schedule primary")
+        .expect("primary pass granted concurrently without X100/A100 contention");
+
+    assert_eq!(scanner_pass.allocated_mask, x100_guardrail_mask);
+    assert_eq!(primary_pass.allocated_mask, a100_primary_mask);
+    assert_eq!(
+        scheduler.running_cores_mask(),
+        x100_guardrail_mask | a100_primary_mask
+    );
+
+    // 3. Verify combined weights + conservative n_ctx=64 KV cache stays well below 28 GiB RLIMIT_MEMLOCK ceiling
+    let scanner_kv_bytes = 0_u64; // Zero-KV bidirectional DeBERTa-v3 encoder
+    let primary_kv_bytes = estimate_bounded_kv_memlock_kb(64, 0).saturating_mul(1024);
+
+    let combined_locked_bytes = scanner_manifest
+        .weight_size_bytes
+        .saturating_add(scanner_kv_bytes)
+        .saturating_add(primary_manifest.weight_size_bytes)
+        .saturating_add(primary_kv_bytes);
+
+    assert!(
+        combined_locked_bytes < BOUNDED_MEMLOCK_CEILING_BYTES,
+        "combined X100+A100 locked memory ({combined_locked_bytes} bytes) must remain below BOUNDED_MEMLOCK_CEILING_BYTES ({BOUNDED_MEMLOCK_CEILING_BYTES} bytes)"
+    );
+
+    scheduler.record_pass_completion(&scanner_pass, 4.0, 0.0, 32);
+    scheduler.record_pass_completion(&primary_pass, 35.0, 12.0, 64);
     assert_eq!(scheduler.running_cores_mask(), 0x0000);
 }
