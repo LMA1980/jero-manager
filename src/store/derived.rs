@@ -561,6 +561,92 @@ pub fn repack_phi3_fused_tensor_ime_8x16(
     Ok(results)
 }
 
+/// Repacks a 3D stacked `MoE` expert tensor (`ffn_{gate,up,down}_exps.weight`) into
+/// contiguous per-expert `8x16` `i8` IME tiles aligned to 64-byte boundaries.
+///
+/// # Errors
+/// Returns [`K3Error::TensorBoundsError`] if:
+/// - `num_experts == 0`,
+/// - `stacked_exps` fails 3D expert slicing via [`TensorView::slice_expert`],
+/// - each expert's column dimension `k` is not a multiple of `TILE_K` (`16`),
+/// - or `stacked_exps` uses an unsupported quantization layout or unexpected byte length.
+pub fn repack_stacked_moe_experts_ime_8x16(
+    stacked_exps: &TensorView<'_>,
+    num_experts: usize,
+) -> Result<Vec<u8>, K3Error> {
+    const EXPERT_ALIGN_BYTES: usize = 64;
+
+    if num_experts == 0 {
+        return Err(K3Error::TensorBoundsError {
+            tensor_name: stacked_exps.name().to_owned(),
+            offset: stacked_exps.offset(),
+            byte_len: stacked_exps.byte_len(),
+            buffer_len: stacked_exps.byte_len(),
+            reason: "num_experts must be greater than zero".to_owned(),
+        });
+    }
+
+    let mut out = Vec::new();
+    for expert_idx in 0..num_experts {
+        let expert_view = stacked_exps.slice_expert(expert_idx, num_experts)?;
+        let shape = expert_view.shape();
+        let (k, rows) = (shape[0], shape[1]);
+        if k % TILE_K != 0 {
+            return Err(K3Error::TensorBoundsError {
+                tensor_name: expert_view.name().to_owned(),
+                offset: expert_view.offset(),
+                byte_len: expert_view.byte_len(),
+                buffer_len: expert_view.byte_len(),
+                reason: format!(
+                    "expert column dimension {k} must be a multiple of TILE_K ({TILE_K})"
+                ),
+            });
+        }
+
+        let i8_vec: Vec<i8> = if expert_view.quant() == QuantType::Q8_0 {
+            let mut v = Vec::with_capacity(rows * k);
+            let row_blocks = k / 32;
+            let raw = expert_view.as_bytes();
+            for row in 0..rows {
+                let row_start_byte = row * row_blocks * 34;
+                for block in 0..row_blocks {
+                    let block_start = row_start_byte + block * 34;
+                    let qs = &raw[block_start + 2..block_start + 34];
+                    v.extend(qs.iter().map(|&b| i8::from_ne_bytes([b])));
+                }
+            }
+            v
+        } else {
+            let raw = expert_view.as_bytes();
+            let expected = rows * k;
+            if raw.len() == expected {
+                raw.iter().map(|&b| i8::from_ne_bytes([b])).collect()
+            } else {
+                return Err(K3Error::TensorBoundsError {
+                    tensor_name: expert_view.name().to_owned(),
+                    offset: expert_view.offset(),
+                    byte_len: expert_view.byte_len(),
+                    buffer_len: expert_view.byte_len(),
+                    reason: format!(
+                        "unsupported quant {:?} or unexpected byte length {} for {} elements",
+                        expert_view.quant(),
+                        raw.len(),
+                        expected
+                    ),
+                });
+            }
+        };
+
+        let packed = pack_tiles(&i8_vec, rows, k);
+        out.reserve(packed.len() + EXPERT_ALIGN_BYTES);
+        out.extend(packed.iter().map(|&x| x.to_ne_bytes()[0]));
+        let padded_len = out.len().next_multiple_of(EXPERT_ALIGN_BYTES);
+        out.resize(padded_len, 0);
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,5 +755,149 @@ mod tests {
         let view_1d = TensorView::from_bytes("1d", QuantType::F32, &shape_1d, 0, &raw_1d).unwrap();
         let err_1d = repack_phi3_fused_tensor_ime_8x16(&view_1d, &[32]).expect_err("requires 2D");
         assert!(matches!(err_1d, K3Error::TensorBoundsError { .. }));
+    }
+
+    #[test]
+    fn test_qwen3moe_derived_blob_alignment() {
+        let num_experts = 128;
+        let rows = 8;
+        let cols = 32; // Q8_0 block aligned & TILE_K=16 aligned
+        let block_bytes = 34;
+        let expert_bytes = rows * (cols / 32) * block_bytes;
+        let mut raw = vec![0_u8; num_experts * expert_bytes];
+        for e in 0..num_experts {
+            let base = e * expert_bytes;
+            for r in 0..rows {
+                let row_off = base + r * block_bytes;
+                raw[row_off..row_off + 2].copy_from_slice(&0x3C00_u16.to_le_bytes());
+                let val = u8::try_from((e + r) % 120 + 1).expect("fits u8");
+                raw[row_off + 2..row_off + 34].fill(val);
+            }
+        }
+
+        let shape_3d = [cols, rows, num_experts];
+        let view = TensorView::from_bytes(
+            "blk.0.ffn_gate_exps.weight",
+            QuantType::Q8_0,
+            &shape_3d,
+            0,
+            &raw,
+        )
+        .expect("3D Q8_0 view");
+
+        let packed_blob =
+            repack_stacked_moe_experts_ime_8x16(&view, num_experts).expect("repack 128 experts");
+        let bytes_per_expert = rows.div_ceil(8) * (cols / 16) * 128; // 256 bytes, multiple of 64B and 128B
+        assert_eq!(bytes_per_expert % 64, 0);
+        assert_eq!(bytes_per_expert % 128, 0);
+        assert_eq!(packed_blob.len(), num_experts * bytes_per_expert);
+        for e in 0..num_experts {
+            let off = e * bytes_per_expert;
+            assert_eq!(off % 64, 0);
+            let expected_first = u8::try_from(e % 120 + 1).expect("fits u8");
+            assert_eq!(packed_blob[off], expected_first);
+        }
+
+        // Rejection guards
+        let err_zero =
+            repack_stacked_moe_experts_ime_8x16(&view, 0).expect_err("reject zero experts");
+        assert!(matches!(err_zero, K3Error::TensorBoundsError { .. }));
+
+        let shape_2d = [cols, rows];
+        let view_2d =
+            TensorView::from_bytes("2d", QuantType::Q8_0, &shape_2d, 0, &raw[..expert_bytes])
+                .expect("2D view");
+        let err_2d = repack_stacked_moe_experts_ime_8x16(&view_2d, 1).expect_err("reject 2D");
+        assert!(matches!(err_2d, K3Error::TensorBoundsError { .. }));
+    }
+
+    #[test]
+    fn test_repack_stacked_moe_experts_contiguous() {
+        let num_experts = 4;
+        let rows = 8;
+        let cols = 32;
+        let expert_elems = rows * cols;
+        let expert_bytes = rows * 34;
+
+        // Standard GGUF [cols, rows, num_experts] ordering
+        let mut raw_col_major = vec![0_u8; num_experts * expert_bytes];
+        let mut expected_all = Vec::new();
+        for e in 0..num_experts {
+            let mut expert_i8 = Vec::with_capacity(expert_elems);
+            for r in 0..rows {
+                let row_off = e * expert_bytes + r * 34;
+                raw_col_major[row_off..row_off + 2].copy_from_slice(&0x3C00_u16.to_le_bytes());
+                for k in 0..cols {
+                    let q = i8::try_from(((e * 17 + r * 3 + k) % 97) + 1).expect("fits i8");
+                    raw_col_major[row_off + 2 + k] = q.to_ne_bytes()[0];
+                    expert_i8.push(q);
+                }
+            }
+            let packed = pack_tiles(&expert_i8, rows, cols);
+            expected_all.extend(packed.iter().map(|&v| v.to_ne_bytes()[0]));
+        }
+
+        let shape_gguf = [cols, rows, num_experts];
+        let view_gguf = TensorView::from_bytes(
+            "blk.1.ffn_down_exps.weight",
+            QuantType::Q8_0,
+            &shape_gguf,
+            0,
+            &raw_col_major,
+        )
+        .expect("gguf 3D view");
+        let actual_gguf =
+            repack_stacked_moe_experts_ime_8x16(&view_gguf, num_experts).expect("repack gguf 3D");
+        assert_eq!(actual_gguf, expected_all);
+
+        // Synthetic [num_experts, rows, cols] ordering when shape[2] != num_experts
+        let shape_synth = [num_experts, rows, cols];
+        let view_synth = TensorView::from_bytes(
+            "blk.1.ffn_up_exps.weight",
+            QuantType::Q8_0,
+            &shape_synth,
+            0,
+            &raw_col_major,
+        )
+        .expect("synthetic 3D view");
+        let actual_synth =
+            repack_stacked_moe_experts_ime_8x16(&view_synth, num_experts).expect("repack synth 3D");
+        assert_eq!(actual_synth, expected_all);
+    }
+
+    #[test]
+    fn test_qwen3moe_expert_tile_alignment() {
+        let num_experts = 128;
+        let rows = 10; // spans 2 TILE_M=8 tiles with zero-padded rows 10..16
+        let cols = 32;
+        let block_bytes = 34;
+        let expert_bytes = rows * block_bytes;
+        let mut raw = vec![0_u8; num_experts * expert_bytes];
+        for e in 0..num_experts {
+            for r in 0..rows {
+                let row_off = e * expert_bytes + r * block_bytes;
+                raw[row_off..row_off + 2].copy_from_slice(&0x3C00_u16.to_le_bytes());
+                let marker = i8::try_from((e % 50) + 1).expect("fits i8").to_ne_bytes()[0];
+                raw[row_off + 2..row_off + 34].fill(marker);
+            }
+        }
+
+        let shape = [cols, rows, num_experts];
+        let view =
+            TensorView::from_bytes("blk.2.ffn_up_exps.weight", QuantType::Q8_0, &shape, 0, &raw)
+                .expect("qwen3moe 3D view");
+        let packed =
+            repack_stacked_moe_experts_ime_8x16(&view, num_experts).expect("repack tiled experts");
+
+        // tile_count(10) = 2 row tiles, k_chunks = 2, tile bytes = 128 => 512 bytes/expert
+        let expected_stride = 2 * 2 * 128;
+        assert_eq!(expected_stride % 64, 0);
+        assert_eq!(packed.len(), num_experts * expected_stride);
+        for e in 0..num_experts {
+            let expert_slice = &packed[e * expected_stride..(e + 1) * expected_stride];
+            // Rows 10..15 in the second row tile (tile offset 256) must be zero-padded
+            let tile1_k0 = &expert_slice[256..256 + 128];
+            assert!(tile1_k0[2 * 16..].iter().all(|&b| b == 0));
+        }
     }
 }
