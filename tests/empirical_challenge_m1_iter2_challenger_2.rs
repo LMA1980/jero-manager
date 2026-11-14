@@ -515,7 +515,7 @@ fn test_capability_filtering_invalid_quants_and_formats() {
         ("qwen3", "1.0.0", "IQ1_S"),
         ("qwen3", "1.0.0", "EXL2"),
         ("qwen3", "1.0.0", "INT4_AWQ"),
-        ("qwen3", "1.0.0", "Q8_0"), // qwen3 compiled only supports Q4_K_M, F32, F16, BF16
+        ("qwen3", "1.0.0", "Q3_K_M"), // Q3_K_M is not supported by qwen3@1.0.0
         ("llama", "1.0.0", "Q3_K_M"),
         ("synthetic", "1.0.0", "Q5_K_M"),
         ("synthetic", "1.0.0", ""), // empty quant string

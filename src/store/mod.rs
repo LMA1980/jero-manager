@@ -13,6 +13,7 @@ pub use cas::{
 pub use derived::{
     DerivedBlobManager, DerivedResolution, RetentionPolicy, StaleRecipeOutcome,
     check_derived_memory_admission, repack_phi3_fused_tensor_ime_8x16,
+    repack_stacked_moe_experts_ime_8x16,
 };
 pub use filter::{
     AlignedPromptEnvironment, CandidateSuitability, CapabilityFilter, RecipeDescriptor,

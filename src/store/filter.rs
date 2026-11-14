@@ -53,7 +53,11 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
-    // 2. Qwen3 base recipe (ADR-023)
+    let qwen_deepseek_quants: &[&str] = &[
+        "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+    ];
+
+    // 2. Qwen family recipes (ChatML) & DeepSeek2 (ADR-023)
     let qwen3_template = ChatTemplate::new(Some(
         "<|im_start|>user\n{{prompt}}<|im_end|>\n<|im_start|>assistant\n".to_owned(),
     ));
@@ -63,15 +67,36 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         ..Default::default()
     };
 
+    for arch in ["qwen2", "qwen3", "qwen3moe", "qwen35", "qwen35moe"] {
+        map.insert(
+            format!("{arch}@1.0.0"),
+            RecipeDescriptor {
+                architecture_id: arch,
+                recipe_version: "1.0.0",
+                supported_quants: qwen_deepseek_quants,
+                target_layouts: &["native", "ime_tile_8x16"],
+                default_chat_template: Some(qwen3_template.clone()),
+                special_tokens: Some(qwen3_stop.clone()),
+            },
+        );
+    }
+
+    let deepseek2_template =
+        ChatTemplate::new(Some("<｜User｜>{{prompt}}<｜Assistant｜>".to_owned()));
+    let deepseek2_stop = SpecialTokens {
+        stop_tokens: vec![1, 100_001],
+        eot_token_id: Some(100_001),
+        ..Default::default()
+    };
     map.insert(
-        "qwen3@1.0.0".to_owned(),
+        "deepseek2@1.0.0".to_owned(),
         RecipeDescriptor {
-            architecture_id: "qwen3",
+            architecture_id: "deepseek2",
             recipe_version: "1.0.0",
-            supported_quants: &["Q4_K_M", "F32", "F16", "BF16"],
+            supported_quants: qwen_deepseek_quants,
             target_layouts: &["native", "ime_tile_8x16"],
-            default_chat_template: Some(qwen3_template),
-            special_tokens: Some(qwen3_stop),
+            default_chat_template: Some(deepseek2_template),
+            special_tokens: Some(deepseek2_stop),
         },
     );
 
@@ -796,6 +821,75 @@ impl CapabilityFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_qwen_deepseek_recipe_registry() {
+        let recipes = CapabilityFilter::supported_recipes();
+        for arch in [
+            "qwen2",
+            "qwen3",
+            "qwen3moe",
+            "qwen35",
+            "qwen35moe",
+            "deepseek2",
+        ] {
+            assert!(
+                recipes.contains(&format!("{arch}@1.0.0")),
+                "missing recipe {arch}@1.0.0"
+            );
+            assert!(CapabilityFilter::is_supported(arch, "1.0.0"));
+        }
+        assert!(!recipes.contains(&"qwen3.8@1.0.0".to_owned()));
+        assert!(!CapabilityFilter::is_supported("qwen3.8", "1.0.0"));
+
+        for arch in ["qwen2", "qwen3", "qwen3moe", "qwen35", "qwen35moe"] {
+            let env = CapabilityFilter::align_prompt_environment(arch, "1.0.0")
+                .expect("qwen chatml alignment");
+            assert!(
+                env.chat_template
+                    .format_prompt("hi")
+                    .contains("<|im_start|>")
+            );
+            assert!(env.is_stop_token(151_643));
+            assert!(env.is_stop_token(151_645));
+        }
+
+        let ds_env = CapabilityFilter::align_prompt_environment("deepseek2", "1.0.0")
+            .expect("deepseek2 alignment");
+        assert!(
+            ds_env
+                .chat_template
+                .format_prompt("hi")
+                .contains("<｜User｜>")
+        );
+        assert!(ds_env.is_stop_token(1));
+        assert!(ds_env.is_stop_token(100_001));
+
+        for (arch, quant) in [
+            ("qwen2", "Q5_K"),
+            ("qwen3", "Q8_0"),
+            ("qwen3moe", "Q4_K_M"),
+            ("qwen35", "Q6_K"),
+            ("qwen35moe", "Q4_0"),
+            ("deepseek2", "Q4_K_M"),
+        ] {
+            let manifest = ModelManifest::new(
+                "gguf",
+                arch,
+                "1.0.0",
+                quant,
+                4096,
+                "sha256:test_qwen_deepseek",
+                500_000_000,
+            );
+            let suit = CapabilityFilter::evaluate_candidate(&manifest);
+            assert!(
+                suit.executable,
+                "expected {arch} ({quant}) executable, got {:?}",
+                suit.reason
+            );
+        }
+    }
 
     #[test]
     fn test_mistral_and_mixtral_descriptors_registered() {
