@@ -1273,15 +1273,15 @@ async fn test_postflight_tool_call_security_audit() {
     // Wire dynamic post-flight evaluator on Claude tool_use block
     let runtime = build_guardrail_test_runtime();
     runtime.set_guardrail_evaluator(Arc::new(|req| {
-        if let Some(ref tc) = req.tool_calls_json {
-            if tc.contains("delete_prod_db") {
-                return Ok(GuardrailEvaluateResponse {
-                    safe: false,
-                    risk_score: 0.99,
-                    category: Some("S2".to_owned()),
-                    model: req.model.clone(),
-                });
-            }
+        if let Some(ref tc) = req.tool_calls_json
+            && tc.contains("delete_prod_db")
+        {
+            return Ok(GuardrailEvaluateResponse {
+                safe: false,
+                risk_score: 0.99,
+                category: Some("S2".to_owned()),
+                model: req.model.clone(),
+            });
         }
         Ok(GuardrailEvaluateResponse {
             safe: true,

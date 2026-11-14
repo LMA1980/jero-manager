@@ -500,6 +500,7 @@ pub struct ControlPlaneRuntime {
     prompt_orchestrator: Arc<PromptOrchestrator>,
     queue_depth: Arc<AtomicUsize>,
     placements: Arc<RwLock<HashMap<String, ModelPlacementRecord>>>,
+    model_mlock_bytes: Arc<RwLock<HashMap<String, u64>>>,
     control_workers: Arc<RwLock<Vec<ControlWorkerThread>>>,
     active_tasks: Arc<RwLock<HashMap<u64, ActiveTaskRecord>>>,
     next_task_id: Arc<AtomicU64>,
@@ -614,6 +615,7 @@ impl ControlPlaneRuntime {
             prompt_orchestrator: Arc::new(PromptOrchestrator::new()),
             queue_depth: Arc::new(AtomicUsize::new(0)),
             placements: Arc::new(RwLock::new(HashMap::new())),
+            model_mlock_bytes: Arc::new(RwLock::new(HashMap::new())),
             control_workers: Arc::new(RwLock::new(control_workers)),
             active_tasks: Arc::new(RwLock::new(HashMap::new())),
             next_task_id: Arc::new(AtomicU64::new(1)),
@@ -1703,6 +1705,30 @@ impl ControlPlaneRuntime {
             .write()
             .unwrap_or_else(PoisonError::into_inner);
         map.remove(model_id);
+        let mut mlock_map = self
+            .model_mlock_bytes
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        mlock_map.remove(model_id);
+    }
+
+    /// Records explicit observed locked RAM bytes (`mlock`) for a resident model.
+    pub fn record_model_mlock_bytes(&self, model_id: &str, mlock_bytes: u64) {
+        let mut map = self
+            .model_mlock_bytes
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        map.insert(model_id.to_owned(), mlock_bytes);
+    }
+
+    /// Returns explicit recorded locked RAM bytes for `model_id` if present.
+    #[must_use]
+    pub fn model_mlock_bytes(&self, model_id: &str) -> Option<u64> {
+        let map = self
+            .model_mlock_bytes
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        map.get(model_id).copied()
     }
 
     /// Updates the worker health status, process ID, and generation counter for a model.
@@ -1746,6 +1772,18 @@ impl ControlPlaneRuntime {
         let mut keys: Vec<String> = map.keys().cloned().collect();
         keys.sort_unstable();
         keys
+    }
+
+    /// Returns deterministically sorted full placement snapshots without mutating audit logs.
+    #[must_use]
+    pub fn model_placement_snapshots(&self) -> Vec<ModelPlacementRecord> {
+        let map = self
+            .placements
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut records: Vec<ModelPlacementRecord> = map.values().cloned().collect();
+        records.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+        records
     }
 
     /// Returns snapshots of all currently registered compute workers.

@@ -186,18 +186,17 @@ impl FlightReceiver {
     pub fn receive_to_memfd(flight_stream: FlightStream) -> Result<RawFd, K3Error> {
         let mut max_extent = flight_stream.total_bytes;
         for batch in &flight_stream.batches {
-            if batch.num_columns() >= 6 {
-                if let (Some(offsets), Some(weights)) = (
+            if batch.num_columns() >= 6
+                && let (Some(offsets), Some(weights)) = (
                     batch.column(3).as_any().downcast_ref::<UInt64Array>(),
                     batch.column(5).as_any().downcast_ref::<BinaryArray>(),
-                ) {
-                    let rows = offsets.len().min(weights.len());
-                    for i in 0..rows {
-                        let extent =
-                            (offsets.value(i) as usize).saturating_add(weights.value(i).len());
-                        if extent > max_extent {
-                            max_extent = extent;
-                        }
+                )
+            {
+                let rows = offsets.len().min(weights.len());
+                for i in 0..rows {
+                    let extent = (offsets.value(i) as usize).saturating_add(weights.value(i).len());
+                    if extent > max_extent {
+                        max_extent = extent;
                     }
                 }
             }

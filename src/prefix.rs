@@ -463,10 +463,10 @@ impl PrefixRadixIndex {
             let rem = map
                 .get_mut(project_id)
                 .and_then(|models| models.remove(&scope));
-            if let Some(models) = map.get(project_id) {
-                if models.is_empty() {
-                    map.remove(project_id);
-                }
+            if let Some(models) = map.get(project_id)
+                && models.is_empty()
+            {
+                map.remove(project_id);
             }
             rem
         };

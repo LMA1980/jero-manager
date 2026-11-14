@@ -364,11 +364,11 @@ impl ModelAdmissionQueue {
     /// Emits periodic keep-alive heartbeats to all queued streaming requests.
     pub fn emit_keep_alives(&self) {
         for req in &self.queue {
-            if req.is_streaming {
-                if let Some(sse_tx) = &req.sse_sender {
-                    let frame = QueueSseFrame::KeepAlive.format_frame();
-                    let _ = sse_tx.try_send(frame);
-                }
+            if req.is_streaming
+                && let Some(sse_tx) = &req.sse_sender
+            {
+                let frame = QueueSseFrame::KeepAlive.format_frame();
+                let _ = sse_tx.try_send(frame);
             }
         }
     }
@@ -416,6 +416,34 @@ impl AdmissionQueueManager {
     pub fn total_queue_depth(&self) -> usize {
         let q_map = self.queues.lock().unwrap_or_else(PoisonError::into_inner);
         q_map.values().map(ModelAdmissionQueue::len).sum()
+    }
+
+    /// Atomically snapshots aggregate queue depth, execution status, and worst-case wait estimate (ms).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[must_use]
+    pub fn aggregate_status(&self) -> (usize, bool, u64) {
+        let q_map = self.queues.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut total_depth = 0_usize;
+        let mut any_executing = false;
+        let mut max_wait_ms = 0.0_f64;
+
+        for q in q_map.values() {
+            total_depth += q.len();
+            if q.is_executing() {
+                any_executing = true;
+            }
+            let wait = q.estimate_wait_ms(None);
+            if wait.is_finite() && wait > max_wait_ms {
+                max_wait_ms = wait;
+            }
+        }
+
+        let estimated_wait_ms = if max_wait_ms <= 0.0 {
+            0
+        } else {
+            max_wait_ms.ceil() as u64
+        };
+        (total_depth, any_executing, estimated_wait_ms)
     }
 
     /// Admits a request to the target model queue.

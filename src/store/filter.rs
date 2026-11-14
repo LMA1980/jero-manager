@@ -566,12 +566,11 @@ pub fn parse_llamaguard_hazard(text: &str) -> (bool, Option<String>) {
             if token.is_empty() {
                 continue;
             }
-            if let Some(num_str) = token.strip_prefix(['S', 's']) {
-                if let Ok(code) = num_str.parse::<u8>() {
-                    if (1..=14).contains(&code) {
-                        return (false, Some(format!("S{code}")));
-                    }
-                }
+            if let Some(num_str) = token.strip_prefix(['S', 's'])
+                && let Ok(code) = num_str.parse::<u8>()
+                && (1..=14).contains(&code)
+            {
+                return (false, Some(format!("S{code}")));
             }
         }
     }

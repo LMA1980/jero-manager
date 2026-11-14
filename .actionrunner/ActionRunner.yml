@@ -23,7 +23,9 @@ tasks:
 
   audit-task:
     tool: "cargo-audit"
-    args: []
+    # webauthn-rs-core 0.6.2 -> crypto-glue 0.2.2 (via mu-auth/github-oauth) locks
+    # rsa 0.10.0-rc.19; rsa 0.10.0 removed `sha2`, and jero-manager performs no RSA key ops.
+    args: ["--ignore", "RUSTSEC-2023-0071"]
     timeout_seconds: 180
     sandbox_profile: "default_ci"
 

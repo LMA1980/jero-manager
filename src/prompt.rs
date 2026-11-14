@@ -176,16 +176,15 @@ impl IncrementalStopDetector {
             self.stopped = true;
             return true;
         }
-        if let Some(fragment) = text_fragment {
-            if self
+        if let Some(fragment) = text_fragment
+            && self
                 .special_tokens
                 .stop_sequences
                 .iter()
                 .any(|seq| !seq.is_empty() && fragment.contains(seq.as_str()))
-            {
-                self.stopped = true;
-                return true;
-            }
+        {
+            self.stopped = true;
+            return true;
         }
         self.observed_tokens.push(token_id);
         false

@@ -184,10 +184,10 @@ pub fn estimate_bounded_kv_memlock_kb(n_ctx: usize, cached_prefix_blocks: usize)
 /// Parses a W3C `traceparent` header if present and valid, or generates a deterministic root [`TraceContext`].
 #[must_use]
 pub fn resolve_or_create_trace_context(traceparent_header: Option<&str>) -> TraceContext {
-    if let Some(raw) = traceparent_header {
-        if let Ok(ctx) = TraceContext::parse_traceparent(raw) {
-            return ctx;
-        }
+    if let Some(raw) = traceparent_header
+        && let Ok(ctx) = TraceContext::parse_traceparent(raw)
+    {
+        return ctx;
     }
     let seq = TELEMETRY_SPAN_SEED.fetch_add(1, Ordering::Relaxed);
     let now_ns = u64::try_from(current_unix_nanos()).unwrap_or(1);

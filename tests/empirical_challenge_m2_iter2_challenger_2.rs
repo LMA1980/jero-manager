@@ -123,11 +123,11 @@ fn spawn_mock_worker_loop(
 
                     if let Ok(hdr) = worker_arena.header() {
                         let offset = hdr.output_slabs_offset as usize;
-                        if let Ok(slice) = worker_arena.slice_mut(offset, 64) {
-                            if let Ok(slab) = OutputSlabHeader::mut_from_bytes(slice) {
-                                slab.status = SLAB_STATUS_WRITTEN;
-                                slab.vocab_size = 16;
-                            }
+                        if let Ok(slice) = worker_arena.slice_mut(offset, 64)
+                            && let Ok(slab) = OutputSlabHeader::mut_from_bytes(slice)
+                        {
+                            slab.status = SLAB_STATUS_WRITTEN;
+                            slab.vocab_size = 16;
                         }
                     }
 

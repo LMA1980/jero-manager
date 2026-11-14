@@ -182,18 +182,18 @@ impl ResolvedControlCapacityExt for ResolvedControlCapacity {
                 }
             }
 
-            if let Some(threads) = placement.threads {
-                if threads as usize > mask.count_ones() as usize {
-                    return Err(ManagerError::Affinity(K3Error::AffinityError {
-                        requested_mask: mask,
-                        requested_threads: threads as usize,
-                        reason: format!(
-                            "worker placement on '{0}' requests {threads} threads, exceeding {1} available cores in affinity mask 0x{mask:04X}",
-                            placement.model_id,
-                            mask.count_ones()
-                        ),
-                    }));
-                }
+            if let Some(threads) = placement.threads
+                && threads as usize > mask.count_ones() as usize
+            {
+                return Err(ManagerError::Affinity(K3Error::AffinityError {
+                    requested_mask: mask,
+                    requested_threads: threads as usize,
+                    reason: format!(
+                        "worker placement on '{0}' requests {threads} threads, exceeding {1} available cores in affinity mask 0x{mask:04X}",
+                        placement.model_id,
+                        mask.count_ones()
+                    ),
+                }));
             }
         }
         Ok(())

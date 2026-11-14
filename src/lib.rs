@@ -48,14 +48,20 @@ pub use store::{
 };
 
 pub use protocol::{
-    ClaudeAdapter, ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse,
-    ClaudeMessage, ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem, ClaudeThinkingConfig,
-    ClaudeTool, ClaudeUsage, GuardrailEvaluateRequest, GuardrailEvaluateResponse, GuardrailPolicy,
-    OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice,
-    OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunction,
-    OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage, OpenAiStop, OpenAiTool,
-    OpenAiToolCall, OpenAiUsage, ProtocolServer, ProtocolServerConfig, ThinkingTagParser,
-    audit_generated_tool_call, handle_guardrail_evaluate,
+    AuthClock, ClaudeAdapter, ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails,
+    ClaudeErrorResponse, ClaudeMessage, ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem,
+    ClaudeThinkingConfig, ClaudeTool, ClaudeUsage, GuardrailEvaluateRequest,
+    GuardrailEvaluateResponse, GuardrailPolicy, ModelRunnerAuthBundle, ModelRunnerAuthPolicy,
+    ModelRunnerConnectionConfig, ModelRunnerConnectionResponse, ModelRunnerEndpointConfig,
+    ModelRunnerStatusResponse, OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
+    OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
+    OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage,
+    OpenAiStop, OpenAiTool, OpenAiToolCall, OpenAiUsage, POLICY_MR_MODELS_READ,
+    POLICY_MR_OPENAI_API_READ, POLICY_MR_QUEUE_READ, POLICY_MR_WIREGUARD_VPN_READ, ProtocolServer,
+    ProtocolServerConfig, RegisteredOperator, ResidentModelStatus, ThinkingTagParser,
+    WireGuardPeerSummary, audit_generated_tool_call, build_connection_response,
+    build_status_snapshot, handle_guardrail_evaluate, handle_mr_connection, handle_mr_status,
+    redact_public_key_prefix,
 };
 
 pub use capacity::{

@@ -938,30 +938,24 @@ impl ContentAddressedStore {
         // Symlink escape defense on physical alias directory
         if alias_dir.exists() {
             let weights_link = alias_dir.join("weights");
-            if weights_link.is_symlink() || weights_link.exists() {
-                if let Ok(canon_weights) = fs::canonicalize(&weights_link) {
-                    if !canon_weights.starts_with(&canon_root) {
-                        return Err(K3Error::CapabilityMismatch {
-                            architecture: "cas_security".to_owned(),
-                            reason: format!(
-                                "alias '{alias_id}' resolved outside configured store root"
-                            ),
-                        });
-                    }
-                }
+            if (weights_link.is_symlink() || weights_link.exists())
+                && let Ok(canon_weights) = fs::canonicalize(&weights_link)
+                && !canon_weights.starts_with(&canon_root)
+            {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: "cas_security".to_owned(),
+                    reason: format!("alias '{alias_id}' resolved outside configured store root"),
+                });
             }
             let manifest_link = alias_dir.join("manifest.json");
-            if manifest_link.is_symlink() || manifest_link.exists() {
-                if let Ok(canon_manifest) = fs::canonicalize(&manifest_link) {
-                    if !canon_manifest.starts_with(&canon_root) {
-                        return Err(K3Error::CapabilityMismatch {
-                            architecture: "cas_security".to_owned(),
-                            reason: format!(
-                                "alias '{alias_id}' resolved outside configured store root"
-                            ),
-                        });
-                    }
-                }
+            if (manifest_link.is_symlink() || manifest_link.exists())
+                && let Ok(canon_manifest) = fs::canonicalize(&manifest_link)
+                && !canon_manifest.starts_with(&canon_root)
+            {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: "cas_security".to_owned(),
+                    reason: format!("alias '{alias_id}' resolved outside configured store root"),
+                });
             }
         }
 

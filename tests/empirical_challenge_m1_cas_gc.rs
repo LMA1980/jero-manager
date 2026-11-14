@@ -342,10 +342,10 @@ fn test_challenge3a_staging_filename_collision_empirical_proof() {
         handles.push(thread::spawn(move || {
             let mut paths = std::collections::HashSet::new();
             for _ in 0..attempts {
-                if let Ok((path, _file)) = store_clone.create_staging_file() {
-                    if !paths.insert(path) {
-                        collisions_clone.fetch_add(1, Ordering::Relaxed);
-                    }
+                if let Ok((path, _file)) = store_clone.create_staging_file()
+                    && !paths.insert(path)
+                {
+                    collisions_clone.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }));

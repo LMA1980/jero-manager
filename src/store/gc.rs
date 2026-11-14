@@ -183,10 +183,10 @@ impl MockProcMapsScanner {
     pub fn add_mapping(&self, path: impl AsRef<Path>, mapping: ProcessMappingInfo) {
         let mut map = self.simulated_mappings.lock().unwrap();
         let p = path.as_ref().to_path_buf();
-        if let Ok(canon) = fs::canonicalize(&p) {
-            if canon != p {
-                map.entry(canon).or_default().push(mapping.clone());
-            }
+        if let Ok(canon) = fs::canonicalize(&p)
+            && canon != p
+        {
+            map.entry(canon).or_default().push(mapping.clone());
         }
         map.entry(p).or_default().push(mapping);
     }
@@ -219,10 +219,10 @@ impl ProcessMapsScanner for MockProcMapsScanner {
             if k == canonical_path || k == &canon_in {
                 return Ok(v.clone());
             }
-            if let Ok(canon_k) = fs::canonicalize(k) {
-                if canon_k == canonical_path || canon_k == canon_in {
-                    return Ok(v.clone());
-                }
+            if let Ok(canon_k) = fs::canonicalize(k)
+                && (canon_k == canonical_path || canon_k == canon_in)
+            {
+                return Ok(v.clone());
             }
         }
         Ok(Vec::new())
@@ -470,12 +470,12 @@ impl StorageGarbageCollector {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::MetadataExt;
-                    if let (Ok(m_fd), Ok(m_path)) = (file.metadata(), fs::metadata(&blob_path)) {
-                        if m_fd.dev() != m_path.dev() || m_fd.ino() != m_path.ino() {
-                            // SAFETY: Release lock on open fd
-                            unsafe { libc::flock(fd, libc::LOCK_UN) };
-                            continue;
-                        }
+                    if let (Ok(m_fd), Ok(m_path)) = (file.metadata(), fs::metadata(&blob_path))
+                        && (m_fd.dev() != m_path.dev() || m_fd.ino() != m_path.ino())
+                    {
+                        // SAFETY: Release lock on open fd
+                        unsafe { libc::flock(fd, libc::LOCK_UN) };
+                        continue;
                     }
                 }
 
