@@ -20,14 +20,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use jero_core::error::K3Error;
 
+use crate::error::ManagerError;
+use crate::prompt::normalize_guardrail_input;
 use crate::protocol::ThinkingTagParser;
 use crate::protocol::types::{
-    HttpRequest, HttpResponse, MessageContent, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
-    OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
-    OpenAiErrorResponse, OpenAiFunctionCall, OpenAiFunctionCallChunk, OpenAiResponseMessage,
-    OpenAiToolCall, OpenAiToolCallChunk, OpenAiUsage,
+    GuardrailEvaluateResponse, GuardrailPolicy, HttpRequest, HttpResponse, MessageContent,
+    OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice, OpenAiChunkDelta,
+    OpenAiChunkResponse, OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunctionCall,
+    OpenAiFunctionCallChunk, OpenAiResponseMessage, OpenAiToolCall, OpenAiToolCallChunk,
+    OpenAiUsage,
 };
-use crate::runtime::ControlPlaneRuntime;
+use crate::runtime::{ControlPlaneRuntime, classify_canonical_security_text};
 
 /// Unique request ID counter for deterministic or pseudo-unique ID generation.
 static OPENAI_REQUEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
@@ -119,15 +122,16 @@ impl OpenAiAdapter {
         let n_ctx = entry.n_ctx;
 
         // 2. Build concatenated text prompt for tokenization and context checking
-        let mut prompt_text = String::new();
+        let mut raw_prompt_text = String::new();
         for msg in &req.messages {
-            prompt_text.push_str(&msg.role);
-            prompt_text.push_str(": ");
+            raw_prompt_text.push_str(&msg.role);
+            raw_prompt_text.push_str(": ");
             if let Some(content) = &msg.content {
-                prompt_text.push_str(&content.as_text());
+                raw_prompt_text.push_str(&content.as_text());
             }
-            prompt_text.push('\n');
+            raw_prompt_text.push('\n');
         }
+        let prompt_text = normalize_guardrail_input(&raw_prompt_text);
 
         // 3. Tokenize prompt & check context window bounds (ADR-027, US-23 Scenario 3)
         // Use runtime tokenizer if registered, otherwise fallback to whitespace/character approximation
@@ -197,6 +201,31 @@ impl OpenAiAdapter {
 
         // Detect if tool calling should be triggered for pass-through (ADR-020)
         let tool_call_trigger = Self::detect_tool_call_passthrough(&req);
+
+        // 4b. Fail-closed inline guardrail gate (pre-flight prompt + post-flight tool_calls audit)
+        if let Some(policy) = runtime.guardrail_policy() {
+            let tool_info = tool_call_trigger
+                .as_ref()
+                .map(|tc| (tc.function.name.as_str(), tc.function.arguments.as_str()));
+            if let Err(reason) = crate::protocol::evaluate_inline_guardrail_gate(
+                &runtime,
+                &policy,
+                &prompt_text,
+                tool_info,
+            ) {
+                let err = OpenAiErrorResponse {
+                    error: OpenAiErrorDetails {
+                        message: reason,
+                        r#type: "security_policy_violation".to_owned(),
+                        param: None,
+                        code: Some("security_policy_violation".to_owned()),
+                    },
+                };
+                let json = serde_json::to_string_pretty(&err).unwrap_or_default();
+                return HttpResponse::error(403, json, Vec::new());
+            }
+        }
+
         let raw_reply = Self::raw_simulated_reply(&req.model, &prompt_text);
 
         if is_streaming {
@@ -735,5 +764,115 @@ impl OpenAiAdapter {
         }
 
         serde_json::Value::String(clean_prompt.to_owned())
+    }
+}
+
+/// Audits a generated OpenAI `tool_calls` or Claude `tool_use` invocation against
+/// `policy` prior to returning the payload to callers (`#38`).
+///
+/// Enforces fail-closed validation on invalid policy bounds, empty tool names,
+/// malformed `arguments_json`, and canonicalized cyber/injection hazard signatures.
+///
+/// # Errors
+/// Returns [`ManagerError::Protocol`] when `policy`, `tool_name`, or `arguments_json` is malformed.
+pub fn audit_generated_tool_call(
+    policy: &GuardrailPolicy,
+    tool_name: &str,
+    arguments_json: &str,
+) -> Result<GuardrailEvaluateResponse, ManagerError> {
+    if policy.model_id.trim().is_empty() {
+        return Err(ManagerError::Protocol(
+            "guardrail policy model_id must not be empty".to_owned(),
+        ));
+    }
+    if !policy.risk_threshold.is_finite()
+        || policy.risk_threshold <= 0.0
+        || policy.risk_threshold > 1.0
+    {
+        return Err(ManagerError::Protocol(format!(
+            "guardrail policy threshold must be finite and within (0.0, 1.0], got {}",
+            policy.risk_threshold
+        )));
+    }
+    if tool_name.trim().is_empty() {
+        return Err(ManagerError::Protocol(
+            "tool_name must not be empty for post-flight audit".to_owned(),
+        ));
+    }
+    serde_json::from_str::<serde_json::Value>(arguments_json).map_err(|e| {
+        ManagerError::Protocol(format!("malformed tool arguments JSON for audit: {e}"))
+    })?;
+
+    if !policy.audit_tool_calls {
+        return Ok(GuardrailEvaluateResponse {
+            safe: true,
+            risk_score: 0.0,
+            category: None,
+            model: policy.model_id.clone(),
+        });
+    }
+
+    let canonical_name = normalize_guardrail_input(tool_name);
+    let canonical_args = normalize_guardrail_input(arguments_json);
+    let combined = format!("{canonical_name} {canonical_args}");
+    let (mut risk_score, mut category) = classify_canonical_security_text("", Some(&combined));
+
+    if category.is_none() {
+        let name_lower = canonical_name.to_ascii_lowercase();
+        let args_lower = canonical_args.to_ascii_lowercase();
+        let is_shell_tool = name_lower.contains("shell")
+            || name_lower.contains("exec")
+            || name_lower.contains("bash");
+        let has_metachar = args_lower.contains(';')
+            || args_lower.contains("&&")
+            || args_lower.contains("||")
+            || args_lower.contains('|')
+            || args_lower.contains("$(");
+        if is_shell_tool && has_metachar {
+            risk_score = 0.97;
+            category = Some("S14");
+        } else {
+            risk_score = 0.03;
+        }
+    }
+
+    let category_owned = category.map(str::to_owned);
+    let safe = risk_score < policy.risk_threshold && category_owned.is_none();
+    Ok(GuardrailEvaluateResponse {
+        safe,
+        risk_score,
+        category: category_owned,
+        model: policy.model_id.clone(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_audit_generated_tool_call_fail_closed_unit() {
+        let policy = GuardrailPolicy {
+            model_id: "granite-guardian-3.1-2b".to_owned(),
+            risk_threshold: 0.5,
+            audit_tool_calls: true,
+        };
+
+        let safe_verdict = audit_generated_tool_call(&policy, "get_weather", r#"{"city":"Paris"}"#)
+            .expect("benign tool call passes");
+        assert!(safe_verdict.safe);
+        assert!(safe_verdict.risk_score < 0.5);
+        assert_eq!(safe_verdict.category, None);
+
+        // Smuggled dangerous command in Unicode Tag + zero-width + non-breaking space characters
+        let smuggled_args = "{\"cmd\":\"r\u{200B}m\u{00A0}\u{E0041}-rf /\"}";
+        let unsafe_verdict = audit_generated_tool_call(&policy, "run_shell", smuggled_args)
+            .expect("dangerous tool call evaluated");
+        assert!(!unsafe_verdict.safe);
+        assert!(unsafe_verdict.risk_score >= 0.5);
+        assert_eq!(unsafe_verdict.category.as_deref(), Some("S14"));
+
+        // Malformed JSON fails closed
+        assert!(audit_generated_tool_call(&policy, "get_weather", "{bad json").is_err());
     }
 }

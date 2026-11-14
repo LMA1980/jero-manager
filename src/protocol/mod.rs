@@ -10,21 +10,108 @@ pub mod openai;
 pub mod server;
 pub mod types;
 
+use crate::runtime::ControlPlaneRuntime;
 use jero_tokenizer::{ThinkingDelta, ThinkingStreamExtractor};
 
 pub use claude::ClaudeAdapter;
-pub use openai::OpenAiAdapter;
-pub use server::{MAX_REQUEST_HEADERS_BYTES, ProtocolServer, ProtocolServerConfig, ServerError};
+pub use openai::{OpenAiAdapter, audit_generated_tool_call};
+pub use server::{
+    MAX_REQUEST_HEADERS_BYTES, ProtocolServer, ProtocolServerConfig, ServerError,
+    handle_guardrail_evaluate,
+};
 pub use types::{
     ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse, ClaudeMessage,
     ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem, ClaudeSystemBlock,
     ClaudeThinkingConfig, ClaudeTool, ClaudeUsage, DEFAULT_MAX_REQUEST_BODY_BYTES,
-    DEFAULT_SOCKET_TIMEOUT_SECS, HttpRequest, HttpResponse, HttpResponseBody, MessageContent,
+    DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest, GuardrailEvaluateResponse,
+    GuardrailPolicy, HttpRequest, HttpResponse, HttpResponseBody, MessageContent,
     OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice, OpenAiChunkDelta,
     OpenAiChunkResponse, OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunction,
     OpenAiFunctionCall, OpenAiFunctionCallChunk, OpenAiMessage, OpenAiResponseMessage, OpenAiStop,
     OpenAiTool, OpenAiToolCall, OpenAiToolCallChunk, OpenAiUsage,
 };
+
+/// Shared fail-closed inline guardrail gate invoked by both OpenAI and Claude adapters
+/// prior to queueing or dispatching requests (`#36`, `#37`, `#38`).
+pub(crate) fn evaluate_inline_guardrail_gate(
+    runtime: &ControlPlaneRuntime,
+    policy: &GuardrailPolicy,
+    canonical_prompt: &str,
+    tool_call: Option<(&str, &str)>,
+) -> Result<(), String> {
+    if !policy.risk_threshold.is_finite()
+        || policy.risk_threshold <= 0.0
+        || policy.risk_threshold > 1.0
+    {
+        return Err(format!(
+            "fail-closed guardrail violation: invalid threshold {}",
+            policy.risk_threshold
+        ));
+    }
+
+    let preflight_req = GuardrailEvaluateRequest {
+        model: policy.model_id.clone(),
+        input: canonical_prompt.to_owned(),
+        tool_calls_json: None,
+        threshold: Some(policy.risk_threshold),
+    };
+    let preflight_verdict = runtime
+        .evaluate_guardrail(&preflight_req)
+        .map_err(|err| format!("fail-closed guardrail error during pre-flight check: {err}"))?;
+    if !preflight_verdict.safe || preflight_verdict.risk_score >= policy.risk_threshold {
+        let category = preflight_verdict
+            .category
+            .unwrap_or_else(|| "POLICY_VIOLATION".to_owned());
+        return Err(format!(
+            "pre-flight guardrail blocked request (model={}, category={category}, risk_score={:.3}, threshold={:.3})",
+            preflight_verdict.model, preflight_verdict.risk_score, policy.risk_threshold
+        ));
+    }
+
+    if policy.audit_tool_calls {
+        if let Some((tool_name, args_json)) = tool_call {
+            let static_verdict =
+                audit_generated_tool_call(policy, tool_name, args_json).map_err(|err| {
+                    format!("fail-closed guardrail error during post-flight tool audit: {err}")
+                })?;
+            if !static_verdict.safe || static_verdict.risk_score >= policy.risk_threshold {
+                let category = static_verdict
+                    .category
+                    .unwrap_or_else(|| "TOOL_AUDIT_VIOLATION".to_owned());
+                return Err(format!(
+                    "post-flight tool call audit blocked '{tool_name}' (model={}, category={category}, risk_score={:.3})",
+                    static_verdict.model, static_verdict.risk_score
+                ));
+            }
+
+            let serialized = serde_json::json!({
+                "name": tool_name,
+                "arguments": args_json,
+            })
+            .to_string();
+            let runtime_req = GuardrailEvaluateRequest {
+                model: policy.model_id.clone(),
+                input: canonical_prompt.to_owned(),
+                tool_calls_json: Some(serialized),
+                threshold: Some(policy.risk_threshold),
+            };
+            let runtime_verdict = runtime.evaluate_guardrail(&runtime_req).map_err(|err| {
+                format!("fail-closed guardrail error during post-flight worker audit: {err}")
+            })?;
+            if !runtime_verdict.safe || runtime_verdict.risk_score >= policy.risk_threshold {
+                let category = runtime_verdict
+                    .category
+                    .unwrap_or_else(|| "TOOL_AUDIT_VIOLATION".to_owned());
+                return Err(format!(
+                    "post-flight guardrail worker blocked '{tool_name}' (model={}, category={category}, risk_score={:.3})",
+                    runtime_verdict.model, runtime_verdict.risk_score
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Stateful reasoning tag parser routing `<|think|>...<|/think|>` (Gemma 4) and
 /// `<think>...</think>` (`Qwen3` / Dory1.0) spans to protocol-specific reasoning deltas.

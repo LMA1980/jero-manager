@@ -19,11 +19,12 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+use crate::error::ManagerError;
 use crate::protocol::claude::ClaudeAdapter;
 use crate::protocol::openai::OpenAiAdapter;
 use crate::protocol::types::{
-    DEFAULT_MAX_REQUEST_BODY_BYTES, DEFAULT_SOCKET_TIMEOUT_SECS, HttpRequest, HttpResponse,
-    HttpResponseBody,
+    DEFAULT_MAX_REQUEST_BODY_BYTES, DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest,
+    HttpRequest, HttpResponse, HttpResponseBody,
 };
 use crate::runtime::ControlPlaneRuntime;
 
@@ -151,6 +152,8 @@ impl ProtocolServer {
             OpenAiAdapter::handle_http(req, Arc::clone(&self.runtime)).await
         } else if path == "/v1/messages" || path == "/messages" {
             ClaudeAdapter::handle_http(req, Arc::clone(&self.runtime)).await
+        } else if path == "/v1/guardrail/evaluate" || path == "/guardrail/evaluate" {
+            handle_guardrail_evaluate(req, Arc::clone(&self.runtime)).await
         } else {
             let json = serde_json::json!({
                 "error": {
@@ -306,10 +309,13 @@ impl ProtocolServer {
         let status_reason = match resp.status {
             200 => "OK",
             400 => "Bad Request",
+            403 => "Forbidden",
             404 => "Not Found",
+            405 => "Method Not Allowed",
             413 => "Payload Too Large",
             429 => "Too Many Requests",
             500 => "Internal Server Error",
+            503 => "Service Unavailable",
             529 => "Overloaded",
             _ => "Response",
         };
@@ -392,5 +398,93 @@ impl ProtocolServer {
         tokio::time::timeout(timeout, future)
             .await
             .map_err(|_| ServerError::Timeout)?
+    }
+}
+
+/// Handles `POST /v1/guardrail/evaluate` requests (`#39`, `#40`), failing closed on
+/// malformed requests (`400`), missing models (`404`), non-POST methods (`405`),
+/// or crashed/unresponsive guardrail workers (`503`).
+pub async fn handle_guardrail_evaluate(
+    req: HttpRequest,
+    runtime: Arc<ControlPlaneRuntime>,
+) -> HttpResponse {
+    if req.method != "POST" {
+        let json = serde_json::json!({
+            "error": {
+                "message": format!("Method '{}' not allowed for /v1/guardrail/evaluate; use POST", req.method),
+                "type": "invalid_request_error",
+                "code": "method_not_allowed"
+            }
+        })
+        .to_string();
+        return HttpResponse::error(405, json, vec![("Allow".to_owned(), "POST".to_owned())]);
+    }
+
+    let eval_req: GuardrailEvaluateRequest = match serde_json::from_slice(&req.body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": format!("Malformed JSON request body: {e}"),
+                    "type": "invalid_request_error",
+                    "code": "invalid_json"
+                }
+            })
+            .to_string();
+            return HttpResponse::error(400, json, Vec::new());
+        }
+    };
+
+    match runtime.evaluate_guardrail(&eval_req) {
+        Ok(verdict) => {
+            let json = serde_json::to_string_pretty(&verdict).unwrap_or_else(|_| "{}".to_owned());
+            HttpResponse::json(200, json)
+        }
+        Err(ManagerError::ModelNotFound(model_id)) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": format!("Guardrail model '{model_id}' not loaded or does not exist"),
+                    "type": "not_found_error",
+                    "code": "model_not_found"
+                }
+            })
+            .to_string();
+            HttpResponse::error(404, json, Vec::new())
+        }
+        Err(ManagerError::Protocol(msg)) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "code": "invalid_request_error"
+                }
+            })
+            .to_string();
+            HttpResponse::error(400, json, Vec::new())
+        }
+        Err(
+            err @ (ManagerError::WorkerCrashed { .. } | ManagerError::WorkerUnresponsive { .. }),
+        ) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": format!("Guardrail worker unavailable (fail-closed): {err}"),
+                    "type": "guardrail_unavailable",
+                    "code": "guardrail_unavailable"
+                }
+            })
+            .to_string();
+            HttpResponse::error(503, json, Vec::new())
+        }
+        Err(err) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": format!("Guardrail evaluation failed (fail-closed): {err}"),
+                    "type": "internal_server_error",
+                    "code": "internal_server_error"
+                }
+            })
+            .to_string();
+            HttpResponse::error(500, json, Vec::new())
+        }
     }
 }

@@ -24,8 +24,9 @@ use crate::persistence::{
 use crate::prefix::{PrefixCacheStats, PrefixMatchResult, PrefixRadixIndex};
 use crate::prompt::{
     ChatTemplate, GgufTokenizer, IncrementalStopDetector, PreparedPrompt, PromptOrchestrator,
-    PromptPreparationRequest, SpecialTokens, Tokenizer,
+    PromptPreparationRequest, SpecialTokens, Tokenizer, normalize_guardrail_input,
 };
+use crate::protocol::{GuardrailEvaluateRequest, GuardrailEvaluateResponse, GuardrailPolicy};
 use crate::queue::AdmissionQueueManager;
 use crate::router::DecisionRouter;
 use crate::scheduler::MultiModelScheduler;
@@ -416,6 +417,80 @@ impl fmt::Debug for ControlWorkerThread {
     }
 }
 
+/// Type alias for custom or test-injected guardrail inference evaluators.
+pub type GuardrailEvaluatorFn = dyn Fn(&GuardrailEvaluateRequest) -> Result<GuardrailEvaluateResponse, ManagerError>
+    + Send
+    + Sync;
+
+#[derive(Default)]
+struct GuardrailRuntimeState {
+    policy: RwLock<Option<GuardrailPolicy>>,
+    evaluator: RwLock<Option<Arc<GuardrailEvaluatorFn>>>,
+}
+
+impl fmt::Debug for GuardrailRuntimeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let has_policy = self.policy.read().is_ok_and(|guard| guard.is_some());
+        let has_evaluator = self.evaluator.read().is_ok_and(|guard| guard.is_some());
+        f.debug_struct("GuardrailRuntimeState")
+            .field("has_policy", &has_policy)
+            .field("has_evaluator", &has_evaluator)
+            .finish()
+    }
+}
+
+pub(crate) fn classify_canonical_security_text(
+    canonical_input: &str,
+    canonical_tool_calls: Option<&str>,
+) -> (f32, Option<&'static str>) {
+    const CYBER_HAZARD_PATTERNS: &[&str] = &[
+        "rm -rf",
+        "/etc/shadow",
+        "/etc/passwd",
+        "../",
+        "drop table",
+        "union select",
+        "169.254.169.254",
+        "curl http",
+        "wget http",
+        "nc -e",
+        "bash -c",
+        "sh -c",
+        "chmod 777",
+    ];
+    const JAILBREAK_PATTERNS: &[&str] = &["developer mode", "jailbreak", "do anything now"];
+    const INJECTION_PATTERNS: &[&str] = &[
+        "ignore previous instructions",
+        "ignore all previous instructions",
+        "disregard system prompt",
+        "system override",
+        "reveal system prompt",
+    ];
+
+    if let Some(tool_calls) = canonical_tool_calls {
+        let tc_lower = tool_calls.to_ascii_lowercase();
+        if CYBER_HAZARD_PATTERNS.iter().any(|p| tc_lower.contains(p)) {
+            return (0.97, Some("S14"));
+        }
+    }
+
+    let input_lower = canonical_input.to_ascii_lowercase();
+    if CYBER_HAZARD_PATTERNS
+        .iter()
+        .any(|p| input_lower.contains(p))
+    {
+        return (0.97, Some("S14"));
+    }
+    if JAILBREAK_PATTERNS.iter().any(|p| input_lower.contains(p)) {
+        return (0.96, Some("JAILBREAK"));
+    }
+    if INJECTION_PATTERNS.iter().any(|p| input_lower.contains(p)) {
+        return (0.95, Some("INJECTION"));
+    }
+
+    (0.02, None)
+}
+
 /// Non-blocking control-plane runtime maintaining active control worker threads (ADR-007, ADR-041).
 #[derive(Debug)]
 pub struct ControlPlaneRuntime {
@@ -435,6 +510,7 @@ pub struct ControlPlaneRuntime {
     queue_mgr: Arc<AdmissionQueueManager>,
     persistence: Arc<dyn PersistenceStore>,
     telemetry: Arc<MuObserveTelemetryStreamer>,
+    guardrail: Arc<GuardrailRuntimeState>,
 }
 
 impl ControlPlaneRuntime {
@@ -548,6 +624,135 @@ impl ControlPlaneRuntime {
             queue_mgr,
             persistence,
             telemetry,
+            guardrail: Arc::new(GuardrailRuntimeState::default()),
+        })
+    }
+
+    /// Configures or disables the active pre/post-flight [`GuardrailPolicy`].
+    pub fn set_guardrail_policy(&self, policy: Option<GuardrailPolicy>) {
+        *self
+            .guardrail
+            .policy
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = policy;
+    }
+
+    /// Returns a cloned snapshot of the active [`GuardrailPolicy`], if configured.
+    #[must_use]
+    pub fn guardrail_policy(&self) -> Option<GuardrailPolicy> {
+        self.guardrail
+            .policy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Installs a custom guardrail evaluator hook for deterministic fault/risk injection tests.
+    pub fn set_guardrail_evaluator(&self, evaluator: Arc<GuardrailEvaluatorFn>) {
+        *self
+            .guardrail
+            .evaluator
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(evaluator);
+    }
+
+    /// Removes any custom guardrail evaluator hook, restoring the built-in classifier.
+    pub fn clear_guardrail_evaluator(&self) {
+        *self
+            .guardrail
+            .evaluator
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Evaluates a prompt and/or serialized tool-call payload against the specified guardrail worker,
+    /// enforcing canonical UTF-8 normalization and strict fail-closed semantics (`#35`..`#40`).
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`ManagerError::Protocol`] if the model id, threshold, or JSON payload is invalid,
+    ///   or if a custom evaluator returns a non-finite score.
+    /// - Returns [`ManagerError::ModelNotFound`] if the guardrail model is not registered.
+    /// - Returns [`ManagerError::WorkerCrashed`] if the guardrail worker placement is not alive.
+    pub fn evaluate_guardrail(
+        &self,
+        req: &GuardrailEvaluateRequest,
+    ) -> Result<GuardrailEvaluateResponse, ManagerError> {
+        if req.model.trim().is_empty() {
+            return Err(ManagerError::Protocol(
+                "guardrail model id must not be empty".to_owned(),
+            ));
+        }
+
+        let threshold = req
+            .threshold
+            .or_else(|| self.guardrail_policy().map(|p| p.risk_threshold))
+            .unwrap_or(0.5);
+        if !threshold.is_finite() || threshold <= 0.0 || threshold > 1.0 {
+            return Err(ManagerError::Protocol(format!(
+                "guardrail threshold must be finite and within (0.0, 1.0], got {threshold}"
+            )));
+        }
+
+        {
+            let map = self
+                .placements
+                .read()
+                .unwrap_or_else(PoisonError::into_inner);
+            let record = map
+                .get(&req.model)
+                .ok_or_else(|| ManagerError::ModelNotFound(req.model.clone()))?;
+            if !record.is_alive {
+                return Err(ManagerError::WorkerCrashed {
+                    model_id: req.model.clone(),
+                    exit_code: Some(1),
+                    signal: None,
+                });
+            }
+        }
+
+        let canonical_input = normalize_guardrail_input(&req.input);
+        let canonical_tool_calls = if let Some(ref tc_raw) = req.tool_calls_json {
+            serde_json::from_str::<serde_json::Value>(tc_raw).map_err(|e| {
+                ManagerError::Protocol(format!("malformed tool_calls_json payload: {e}"))
+            })?;
+            Some(normalize_guardrail_input(tc_raw))
+        } else {
+            None
+        };
+
+        let evaluator = self
+            .guardrail
+            .evaluator
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(eval_fn) = evaluator {
+            let canonical_req = GuardrailEvaluateRequest {
+                model: req.model.clone(),
+                input: canonical_input,
+                tool_calls_json: canonical_tool_calls,
+                threshold: Some(threshold),
+            };
+            let mut resp = eval_fn(&canonical_req)?;
+            if !resp.risk_score.is_finite() {
+                return Err(ManagerError::Protocol(
+                    "guardrail evaluator returned non-finite risk_score".to_owned(),
+                ));
+            }
+            resp.safe = resp.safe && resp.risk_score < threshold && resp.category.is_none();
+            return Ok(resp);
+        }
+
+        let (risk_score, category_opt) =
+            classify_canonical_security_text(&canonical_input, canonical_tool_calls.as_deref());
+        let category = category_opt.map(str::to_owned);
+        let safe = risk_score < threshold && category.is_none();
+        Ok(GuardrailEvaluateResponse {
+            safe,
+            risk_score,
+            category,
+            model: req.model.clone(),
         })
     }
 
