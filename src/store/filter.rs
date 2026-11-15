@@ -466,8 +466,80 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
         },
     );
 
+    // 12. State-space (Mamba / RWKV) and hybrid SSM-transformer recipes
+    register_ssm_and_hybrid_recipes(&mut map);
+
     RwLock::new(map)
 });
+
+fn register_ssm_and_hybrid_recipes(map: &mut HashMap<String, RecipeDescriptor>) {
+    let ssm_hybrid_quants: &[&str] = &[
+        "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q2_K", "Q3_K", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "IQ4_NL",
+        "F32", "F16", "BF16",
+    ];
+    let layouts: &[&str] = &["native", "ime_tile_8x16"];
+
+    let chatml_template = ChatTemplate::new(Some(
+        "<|im_start|>user\n{{prompt}}<|im_end|>\n<|im_start|>assistant\n".to_owned(),
+    ));
+    let chatml_tokens = SpecialTokens {
+        bos_token_id: Some(1),
+        eos_token_id: Some(2),
+        stop_tokens: vec![0, 2],
+        stop_sequences: vec!["<|im_end|>".to_owned(), "<|endoftext|>".to_owned()],
+        ..Default::default()
+    };
+
+    let rwkv_template = ChatTemplate::new(Some("User: {{prompt}}\n\nAssistant: ".to_owned()));
+    let rwkv_tokens = SpecialTokens {
+        eos_token_id: Some(0),
+        stop_tokens: vec![0],
+        stop_sequences: vec!["\n\n".to_owned()],
+        ..Default::default()
+    };
+
+    let granite_hybrid_template = ChatTemplate::new(Some(
+        "<|start_of_role|>user<|end_of_role|>{{prompt}}<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>".to_owned(),
+    ));
+    let granite_hybrid_tokens = SpecialTokens {
+        bos_token_id: Some(0),
+        eos_token_id: Some(2),
+        add_bos_token: false,
+        stop_tokens: vec![0, 2],
+        stop_sequences: vec!["<|end_of_text|>".to_owned()],
+        ..Default::default()
+    };
+
+    let entries: &[(&str, &ChatTemplate, &SpecialTokens)] = &[
+        ("mamba", &chatml_template, &chatml_tokens),
+        ("mamba2", &chatml_template, &chatml_tokens),
+        ("rwkv6", &rwkv_template, &rwkv_tokens),
+        ("rwkv7", &rwkv_template, &rwkv_tokens),
+        ("jamba", &chatml_template, &chatml_tokens),
+        ("zamba2", &chatml_template, &chatml_tokens),
+        (
+            "granitehybrid",
+            &granite_hybrid_template,
+            &granite_hybrid_tokens,
+        ),
+        ("lfm2", &chatml_template, &chatml_tokens),
+        ("lfm2moe", &chatml_template, &chatml_tokens),
+    ];
+
+    for &(arch, template, tokens) in entries {
+        map.insert(
+            format!("{arch}@1.0.0"),
+            RecipeDescriptor {
+                architecture_id: arch,
+                recipe_version: "1.0.0",
+                supported_quants: ssm_hybrid_quants,
+                target_layouts: layouts,
+                default_chat_template: Some(template.clone()),
+                special_tokens: Some(tokens.clone()),
+            },
+        );
+    }
+}
 
 /// Suitability and compatibility assessment for candidate models during search and inspection (US-20 Scenario 1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1270,5 +1342,91 @@ mod tests {
         assert_eq!(parse_llamaguard_hazard(""), (false, None));
         assert_eq!(parse_llamaguard_hazard("safe\nextra-line"), (false, None));
         assert_eq!(parse_llamaguard_hazard("corrupted"), (false, None));
+    }
+
+    #[test]
+    fn test_ssm_and_hybrid_recipe_descriptors() {
+        let recipes = CapabilityFilter::supported_recipes();
+        let ssm_and_hybrid_archs = [
+            "mamba",
+            "mamba2",
+            "rwkv6",
+            "rwkv7",
+            "jamba",
+            "zamba2",
+            "granitehybrid",
+            "lfm2",
+            "lfm2moe",
+        ];
+
+        assert!(recipes.contains(&"granite@1.0.0".to_owned()));
+        assert!(CapabilityFilter::is_supported("granite", "1.0.0"));
+        assert!(!CapabilityFilter::is_supported("mamba3", "1.0.0"));
+
+        for arch in ssm_and_hybrid_archs {
+            assert!(
+                recipes.contains(&format!("{arch}@1.0.0")),
+                "missing recipe {arch}@1.0.0"
+            );
+            assert!(
+                CapabilityFilter::is_supported(arch, "1.0.0"),
+                "CapabilityFilter must support {arch}@1.0.0"
+            );
+            assert!(!CapabilityFilter::is_supported(arch, "2.0.0"));
+
+            for quant in ["Q4_K_M", "Q8_0", "Q5_K", "IQ4_NL", "F16", "BF16"] {
+                let manifest = ModelManifest::new(
+                    "gguf",
+                    arch,
+                    "1.0.0",
+                    quant,
+                    4096,
+                    "sha256:ssm_hybrid",
+                    1_500_000_000,
+                );
+                let suit = CapabilityFilter::evaluate_candidate(&manifest);
+                assert!(
+                    suit.executable,
+                    "expected {arch} ({quant}) executable, got {:?}",
+                    suit.reason
+                );
+                let desc = CapabilityFilter::validate_model_manifest(&manifest)
+                    .unwrap_or_else(|e| panic!("manifest failed for {arch}/{quant}: {e}"));
+                assert_eq!(desc.target_layouts, &["native", "ime_tile_8x16"]);
+            }
+
+            let unsupported_quant = ModelManifest::new(
+                "gguf",
+                arch,
+                "1.0.0",
+                "TQ1_0",
+                4096,
+                "sha256:bad_quant",
+                1_500_000_000,
+            );
+            assert!(
+                !CapabilityFilter::evaluate_candidate(&unsupported_quant).quantization_supported
+            );
+
+            let env = CapabilityFilter::align_prompt_environment(arch, "1.0.0")
+                .unwrap_or_else(|e| panic!("prompt alignment failed for {arch}: {e}"));
+            let formatted = env.chat_template.format_prompt("Explain SSM");
+            assert!(formatted.contains("Explain SSM"));
+        }
+
+        let gh_env = CapabilityFilter::align_prompt_environment("granitehybrid", "1.0.0").unwrap();
+        assert!(
+            gh_env
+                .chat_template
+                .format_prompt("Hi")
+                .contains("<|start_of_role|>user<|end_of_role|>Hi<|end_of_text|>")
+        );
+        assert!(gh_env.is_stop_token(2));
+
+        for rwkv in ["rwkv6", "rwkv7"] {
+            let env = CapabilityFilter::align_prompt_environment(rwkv, "1.0.0").unwrap();
+            assert!(env.chat_template.format_prompt("Hi").contains("User: Hi"));
+            assert!(env.is_stop_token(0));
+        }
     }
 }
