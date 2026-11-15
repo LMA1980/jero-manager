@@ -651,6 +651,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -939,6 +964,12 @@ dependencies = [
  "spki",
  "zeroize",
 ]
+
+[[package]]
+name = "either"
+version = "1.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "elliptic-curve"
@@ -1463,15 +1494,16 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 [[package]]
 name = "jero-arch-mistral"
 version = "0.1.0"
-source = "git+https://github.com/LMA1980/jero-arch-mistral.git?branch=main#a540569640ba69c508641a34ebca7439bad762fa"
+source = "git+https://github.com/LMA1980/jero-arch-mistral.git?branch=main#7365fc539ae70edc9d79e52bc290796ea4d7012f"
 dependencies = [
  "jero-core",
+ "rayon",
 ]
 
 [[package]]
 name = "jero-core"
 version = "0.1.0"
-source = "git+https://github.com/LMA1980/jero-core.git?branch=main#0a0bc3544cc132183e501e3d59f25376230cdc69"
+source = "git+https://github.com/LMA1980/jero-core.git?branch=main#fed373b983131e24236f82607c485915d137064d"
 dependencies = [
  "arrow-array 59.3.2",
  "arrow-buffer 59.3.2",
@@ -1487,7 +1519,7 @@ dependencies = [
 [[package]]
 name = "jero-kernels-rvv"
 version = "0.1.0"
-source = "git+https://github.com/LMA1980/jero-kernels-rvv.git?branch=main#e5f63b31024adba10d7d5030b3d99d5674ad2102"
+source = "git+https://github.com/LMA1980/jero-kernels-rvv.git?branch=main#f3b2e650d6e45708335a2eaad98a8a5f51ff50e1"
 dependencies = [
  "jero-core",
 ]
@@ -1495,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "jero-kv-cache"
 version = "0.1.0"
-source = "git+https://github.com/LMA1980/jero-kv-cache.git?branch=main#feead76174765715d606dde0ff1fe2c697373545"
+source = "git+https://github.com/LMA1980/jero-kv-cache.git?branch=main#3698dceeddb8e62edb882daa737b89811faafcf1"
 dependencies = [
  "arrow-array 59.3.2",
  "arrow-buffer 59.3.2",
@@ -1536,7 +1568,7 @@ dependencies = [
 [[package]]
 name = "jero-tokenizer"
 version = "0.1.0"
-source = "git+https://github.com/LMA1980/jero-tokenizer.git?branch=main#db757a622ccd48355ad251a09c98a516871e2b1d"
+source = "git+https://github.com/LMA1980/jero-tokenizer.git?branch=main#db49c0ba9d0489a76efd2554a2becb1bdd95fe68"
 dependencies = [
  "jero-core",
 ]
@@ -2203,6 +2235,26 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "ref-cast"
