@@ -17,6 +17,7 @@ pub use jero_tokenizer::{
     normalize_guardrail_input,
 };
 
+use crate::dispatch::SystemEventPayload;
 use crate::error::ManagerError;
 
 /// Maps per-request OpenAI/Anthropic `reasoning_effort` (`"low"` -> `1`, `"medium"` -> `2`, `"high"` -> `4`)
@@ -53,6 +54,80 @@ pub fn resolve_dory_loop_budget(
 pub fn format_chat_prompt(template: &ChatTemplate, user_prompt: &str) -> String {
     let canonical = normalize_guardrail_input(user_prompt);
     template.format_prompt(&canonical)
+}
+
+/// Formats a deterministic symbolic machine-state prompt context from a [`SystemEventPayload`]
+/// when no `mmproj` soft-prompt bridge is bound (Sink B symbolic fallback).
+///
+/// Substitutes `{machine_state}`, `{{machine_state}}`, and individual event placeholders
+/// (`{event_code}`, `{target_subsystem}`, `{confidence}`, `{top_causal_features}`, `{timestamp_ms}`)
+/// when present, or prepends a canonical `[MACHINE_STATE ...]` header block otherwise.
+/// All strings are sanitized via [`normalize_guardrail_input`].
+#[must_use]
+pub fn format_symbolic_machine_state(event: &SystemEventPayload, prompt_template: &str) -> String {
+    let event_code = normalize_guardrail_input(&event.event_code);
+    let target_subsystem = normalize_guardrail_input(&event.target_subsystem);
+    let confidence = if event.confidence.is_finite() {
+        format!("{:.4}", event.confidence)
+    } else {
+        "0.0000".to_owned()
+    };
+    let timestamp_ms = event.timestamp_ms.to_string();
+
+    let causal_features = if event.top_causal_features.is_empty() {
+        "none".to_owned()
+    } else {
+        event
+            .top_causal_features
+            .iter()
+            .map(|(name, weight)| {
+                let clean_name = normalize_guardrail_input(name);
+                let clean_weight = if weight.is_finite() { *weight } else { 0.0 };
+                format!("{clean_name}={clean_weight:.3}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let state_block = format!(
+        "[MACHINE_STATE event_code={event_code} target_subsystem={target_subsystem} confidence={confidence} timestamp_ms={timestamp_ms} top_causal_features=[{causal_features}]]"
+    );
+
+    let canonical_template = normalize_guardrail_input(prompt_template);
+    if canonical_template.trim().is_empty() {
+        return state_block;
+    }
+
+    let field_placeholders = [
+        ("{{event_code}}", event_code.as_str()),
+        ("{event_code}", event_code.as_str()),
+        ("{{target_subsystem}}", target_subsystem.as_str()),
+        ("{target_subsystem}", target_subsystem.as_str()),
+        ("{{confidence}}", confidence.as_str()),
+        ("{confidence}", confidence.as_str()),
+        ("{{top_causal_features}}", causal_features.as_str()),
+        ("{top_causal_features}", causal_features.as_str()),
+        ("{{timestamp_ms}}", timestamp_ms.as_str()),
+        ("{timestamp_ms}", timestamp_ms.as_str()),
+    ];
+
+    let has_machine_state_placeholder = canonical_template.contains("{{machine_state}}")
+        || canonical_template.contains("{machine_state}");
+    let has_field_placeholder = field_placeholders
+        .iter()
+        .any(|(token, _)| canonical_template.contains(token));
+
+    if !has_machine_state_placeholder && !has_field_placeholder {
+        return format!("{state_block}\n{canonical_template}");
+    }
+
+    let mut rendered = canonical_template
+        .replace("{{machine_state}}", &state_block)
+        .replace("{machine_state}", &state_block);
+    for (token, value) in field_placeholders {
+        rendered = rendered.replace(token, value);
+    }
+    rendered
 }
 
 /// Evaluates whether a given token ID is considered a stop token in `special_tokens`.
@@ -834,5 +909,43 @@ mod tests {
             .format_prompt("foundation-sec-8b", smuggled_payload)
             .expect("format smuggled");
         assert_eq!(direct_clean, direct_smuggled);
+    }
+
+    #[test]
+    fn test_chained_machine_to_language_symbolic_fallback() {
+        let event = SystemEventPayload {
+            event_code: "STAGE_RESCHEDULE".to_owned(),
+            target_subsystem: "ActionRunner".to_owned(),
+            confidence: 0.9375,
+            top_causal_features: vec![
+                ("worker_queue_depth".to_owned(), 4.25),
+                ("cpu_temp_c".to_owned(), 3.125),
+            ],
+            timestamp_ms: 42_000,
+        };
+
+        // Template without explicit placeholders prepends structured [MACHINE_STATE ...] context
+        let plain =
+            format_symbolic_machine_state(&event, "Recommend ActionRunner mitigation plan.");
+        assert!(plain.contains("[MACHINE_STATE"));
+        assert!(plain.contains("event_code=STAGE_RESCHEDULE"));
+        assert!(plain.contains("target_subsystem=ActionRunner"));
+        assert!(plain.contains("confidence=0.9375"));
+        assert!(plain.contains("worker_queue_depth=4.250"));
+        assert!(plain.ends_with("Recommend ActionRunner mitigation plan."));
+        assert_eq!(
+            plain,
+            format_symbolic_machine_state(&event, "Recommend ActionRunner mitigation plan.")
+        );
+
+        // Template with explicit placeholders renders deterministically
+        let templated = format_symbolic_machine_state(
+            &event,
+            "Subsystem={target_subsystem} Event={event_code} ({confidence}) Drivers={top_causal_features} @{timestamp_ms}",
+        );
+        assert_eq!(
+            templated,
+            "Subsystem=ActionRunner Event=STAGE_RESCHEDULE (0.9375) Drivers=worker_queue_depth=4.250, cpu_temp_c=3.125 @42000"
+        );
     }
 }

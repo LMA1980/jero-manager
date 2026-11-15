@@ -4,16 +4,19 @@
 //! structured canonical manifests (`manifests/sha256/<manifest_digest>.json`),
 //! and a human-browsable relative symlink alias tree (`models/<source>/<namespace>/<name>/<tag>`).
 
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use jero_core::K3Error;
+use jero_core::{K3Error, sanitize_and_normalize_features};
 
 use super::sha256::Sha256;
+use crate::dispatch::validate_target_subsystem;
 use crate::persistence::{
     BlobReferenceRecord, CasCatalog, ModelAliasRecord, ModelBlobRecord, ModelManifestRecord,
 };
@@ -144,6 +147,294 @@ pub trait ModelManifestDigestExt {
 }
 
 impl ModelManifestDigestExt for ModelManifest {
+    fn manifest_digest(&self) -> Result<String, serde_json::Error> {
+        let json = self.to_canonical_json()?;
+        Ok(Sha256::digest(json.as_bytes()))
+    }
+}
+
+const VALID_MACHINE_FEATURE_TYPES: [&str; 22] = [
+    "f16", "f32", "f64", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool", "float16",
+    "float32", "float64", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32",
+];
+
+/// Declarative system-event translation rule bound to a machine-model output signal.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MachineEventRule {
+    /// Deterministic control-plane event identifier emitted when triggered.
+    pub event_code: String,
+    /// Target subsystem identifier: `"ActionRunner"`, `"MuConDe"`, or `"MuIsolation"`.
+    pub target_subsystem: String,
+    /// Optional hysteresis enter threshold override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter_threshold: Option<f32>,
+    /// Optional hysteresis exit threshold override (`exit_threshold < enter_threshold`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_threshold: Option<f32>,
+    /// Optional minimum cooldown window in milliseconds override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_ms: Option<u64>,
+}
+
+impl MachineEventRule {
+    /// Validates event rule invariants upfront.
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] if `event_code` is empty, `target_subsystem` is
+    /// unsupported, or threshold bounds are non-finite / inverted.
+    pub fn validate(&self) -> Result<(), K3Error> {
+        if self.event_code.trim().is_empty() {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: "machine_schema".to_owned(),
+                reason: "MachineEventRule.event_code must not be empty".to_owned(),
+            });
+        }
+        validate_target_subsystem(&self.target_subsystem)?;
+        if let Some(enter) = self.enter_threshold
+            && !enter.is_finite()
+        {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: "machine_schema".to_owned(),
+                reason: format!("MachineEventRule.enter_threshold must be finite, got {enter}"),
+            });
+        }
+        if let Some(exit) = self.exit_threshold
+            && !exit.is_finite()
+        {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: "machine_schema".to_owned(),
+                reason: format!("MachineEventRule.exit_threshold must be finite, got {exit}"),
+            });
+        }
+        if let (Some(enter), Some(exit)) = (self.enter_threshold, self.exit_threshold)
+            && enter <= exit
+        {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: "machine_schema".to_owned(),
+                reason: format!(
+                    "MachineEventRule.enter_threshold ({enter}) must exceed exit_threshold ({exit})"
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Declarative input feature normalization and event-mapping schema bound to a machine model.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MachineFeatureSchema {
+    /// Ordered input column names matching incoming feature vectors and Arrow `RecordBatch` columns.
+    pub feature_names: Vec<String>,
+    /// Ordered feature scalar dtype descriptors (e.g., `"f32"`, `"f64"`, `"i32"`, `"i8"`).
+    pub feature_types: Vec<String>,
+    /// Ordered per-column z-score mean values used for deterministic online normalization.
+    pub zscore_mean: Vec<f32>,
+    /// Ordered per-column strictly positive standard deviations used for online normalization.
+    pub zscore_std: Vec<f32>,
+    /// Deterministic mapping from signal names (e.g., `"anomaly"`, `"default"`) to event sink rules.
+    #[serde(default)]
+    pub event_mappings: BTreeMap<String, MachineEventRule>,
+}
+
+impl MachineFeatureSchema {
+    /// Validates structural consistency and finiteness of all feature columns, normalization
+    /// statistics, and event mapping rules.
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] on empty/duplicate feature names, mismatched column
+    /// lengths, unsupported feature types, non-finite statistics, `zscore_std <= 0.0`, or invalid rules.
+    pub fn validate(&self) -> Result<(), K3Error> {
+        let n = self.feature_names.len();
+        if n == 0 {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: "machine_schema".to_owned(),
+                reason: "MachineFeatureSchema.feature_names must not be empty".to_owned(),
+            });
+        }
+        if self.feature_types.len() != n
+            || self.zscore_mean.len() != n
+            || self.zscore_std.len() != n
+        {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: "machine_schema".to_owned(),
+                reason: format!(
+                    "MachineFeatureSchema column lengths disagree: names={n}, types={}, mean={}, std={}",
+                    self.feature_types.len(),
+                    self.zscore_mean.len(),
+                    self.zscore_std.len()
+                ),
+            });
+        }
+
+        let mut seen = HashSet::with_capacity(n);
+        for idx in 0..n {
+            let name = &self.feature_names[idx];
+            if name.trim().is_empty() || !seen.insert(name.as_str()) {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: "machine_schema".to_owned(),
+                    reason: format!(
+                        "MachineFeatureSchema.feature_names[{idx}] ('{name}') is empty or duplicate"
+                    ),
+                });
+            }
+            let ftype = self.feature_types[idx].trim().to_ascii_lowercase();
+            let valid_type =
+                VALID_MACHINE_FEATURE_TYPES.contains(&ftype.as_str()) || ftype == "uint64";
+            if !valid_type {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: "machine_schema".to_owned(),
+                    reason: format!(
+                        "MachineFeatureSchema.feature_types[{idx}] ('{}') is unsupported",
+                        self.feature_types[idx]
+                    ),
+                });
+            }
+            let mean = self.zscore_mean[idx];
+            let std = self.zscore_std[idx];
+            if !mean.is_finite() || !std.is_finite() || std <= 0.0 {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: "machine_schema".to_owned(),
+                    reason: format!(
+                        "MachineFeatureSchema z-score stats invalid for column '{name}': mean={mean}, std={std}"
+                    ),
+                });
+            }
+        }
+
+        for (signal, rule) in &self.event_mappings {
+            if signal.trim().is_empty() {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: "machine_schema".to_owned(),
+                    reason: "MachineFeatureSchema.event_mappings key must not be empty".to_owned(),
+                });
+            }
+            rule.validate()?;
+        }
+
+        Ok(())
+    }
+
+    /// Sanitizes and z-score normalizes row-major `raw` feature values against this schema,
+    /// delegating to [`jero_core::sanitize_and_normalize_features`].
+    ///
+    /// # Errors
+    /// Returns [`K3Error`] if this schema is invalid, `raw` contains `NaN`/`±Inf`, `raw.len()` is
+    /// empty or not divisible by `feature_names.len()`, or `clip_sigma` is invalid.
+    pub fn normalize_features(&self, raw: &[f32], clip_sigma: f32) -> Result<Vec<f32>, K3Error> {
+        self.validate()?;
+        let mut out = vec![0.0_f32; raw.len()];
+        sanitize_and_normalize_features(
+            &mut out,
+            raw,
+            &self.zscore_mean,
+            &self.zscore_std,
+            clip_sigma,
+        )?;
+        Ok(out)
+    }
+
+    /// Serializes this schema into deterministic pretty JSON (`BTreeMap`-ordered keys).
+    ///
+    /// # Errors
+    /// Returns [`serde_json::Error`] if serialization fails.
+    pub fn to_canonical_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Computes a deterministic 64-bit FNV-1a schema digest suitable for
+    /// `FeatureInputSlotHeader.schema_hash`.
+    #[must_use]
+    pub fn schema_hash(&self) -> u64 {
+        let bytes = self.to_canonical_json().unwrap_or_default().into_bytes();
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        hash
+    }
+
+    /// Returns the preferred primary event rule (`"default"`, `"anomaly"`, or first rule).
+    #[must_use]
+    pub fn primary_event_rule(&self) -> Option<(&str, &MachineEventRule)> {
+        self.event_mappings
+            .get_key_value("default")
+            .or_else(|| self.event_mappings.get_key_value("anomaly"))
+            .or_else(|| self.event_mappings.iter().next())
+            .map(|(k, v)| (k.as_str(), v))
+    }
+}
+
+/// Extended manifest pairing canonical [`ModelManifest`] metadata with an optional
+/// [`MachineFeatureSchema`] for non-LLM machine-model control-plane deployments.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MachineModelManifest {
+    /// Underlying core model manifest fields (flattened identically at JSON top-level).
+    #[serde(flatten)]
+    pub core: ModelManifest,
+    /// Optional validated feature normalization and event-sink schema for machine models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_schema: Option<MachineFeatureSchema>,
+}
+
+impl MachineModelManifest {
+    /// Constructs a validated [`MachineModelManifest`].
+    ///
+    /// # Errors
+    /// Returns [`K3Error`] if `machine_schema` is `Some` and fails validation.
+    pub fn new(
+        core: ModelManifest,
+        machine_schema: Option<MachineFeatureSchema>,
+    ) -> Result<Self, K3Error> {
+        if let Some(ref schema) = machine_schema {
+            schema.validate()?;
+        }
+        Ok(Self {
+            core,
+            machine_schema,
+        })
+    }
+
+    /// Wraps a plain [`ModelManifest`] with `machine_schema: None`.
+    #[must_use]
+    pub const fn from_core(core: ModelManifest) -> Self {
+        Self {
+            core,
+            machine_schema: None,
+        }
+    }
+
+    /// Serializes this manifest to canonical JSON.
+    ///
+    /// Matches [`ModelManifest::to_canonical_json`] byte-for-byte when `machine_schema` is `None`,
+    /// and includes `"machine_schema"` when `Some` so `manifest_digest` cryptographically binds it.
+    ///
+    /// # Errors
+    /// Returns [`serde_json::Error`] if serialization fails.
+    pub fn to_canonical_json(&self) -> Result<String, serde_json::Error> {
+        if self.machine_schema.is_some() {
+            serde_json::to_string_pretty(self)
+        } else {
+            self.core.to_canonical_json()
+        }
+    }
+}
+
+impl Deref for MachineModelManifest {
+    type Target = ModelManifest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl From<ModelManifest> for MachineModelManifest {
+    fn from(core: ModelManifest) -> Self {
+        Self::from_core(core)
+    }
+}
+
+impl ModelManifestDigestExt for MachineModelManifest {
     fn manifest_digest(&self) -> Result<String, serde_json::Error> {
         let json = self.to_canonical_json()?;
         Ok(Sha256::digest(json.as_bytes()))
@@ -683,26 +974,11 @@ impl ContentAddressedStore {
         Self::verify_format_header_from_file(&mut file, format, file_len)
     }
 
-    /// Registers a model manifest in the store and `DuckDB` catalog (US-18).
-    ///
-    /// Writes the canonical manifest to `<root>/manifests/sha256/<manifest_digest>.json`.
-    ///
-    /// # Errors
-    /// Returns [`K3Error::CapabilityMismatch`] on serialization, disk write, or catalog failure.
-    pub fn register_manifest(
+    fn persist_manifest_json(
         &self,
         manifest: &ModelManifest,
+        canonical_json: String,
     ) -> Result<ModelManifestRecord, K3Error> {
-        validate_sha256_digest(&manifest.weight_digest)?;
-
-        let canonical_json =
-            manifest
-                .to_canonical_json()
-                .map_err(|e| K3Error::CapabilityMismatch {
-                    architecture: "cas_manifest".to_owned(),
-                    reason: format!("failed to serialize manifest to canonical JSON: {e}"),
-                })?;
-
         let manifest_digest = Sha256::digest(canonical_json.as_bytes());
         let manifest_path = self.manifests_dir().join(format!("{manifest_digest}.json"));
 
@@ -768,6 +1044,124 @@ impl ContentAddressedStore {
             })?;
 
         Ok(record)
+    }
+
+    /// Registers a model manifest in the store and `DuckDB` catalog (US-18).
+    ///
+    /// Writes the canonical manifest to `<root>/manifests/sha256/<manifest_digest>.json`.
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] on serialization, disk write, or catalog failure.
+    pub fn register_manifest(
+        &self,
+        manifest: &ModelManifest,
+    ) -> Result<ModelManifestRecord, K3Error> {
+        validate_sha256_digest(&manifest.weight_digest)?;
+
+        let canonical_json =
+            manifest
+                .to_canonical_json()
+                .map_err(|e| K3Error::CapabilityMismatch {
+                    architecture: "cas_manifest".to_owned(),
+                    reason: format!("failed to serialize manifest to canonical JSON: {e}"),
+                })?;
+
+        self.persist_manifest_json(manifest, canonical_json)
+    }
+
+    /// Registers a [`MachineModelManifest`] (with optional validated [`MachineFeatureSchema`])
+    /// in the store and `DuckDB` catalog, populating both `manifest_json` and `machine_schema_json`.
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] if schema validation, serialization, disk write, or
+    /// catalog persistence fails.
+    pub fn register_machine_manifest(
+        &self,
+        manifest: &MachineModelManifest,
+    ) -> Result<ModelManifestRecord, K3Error> {
+        validate_sha256_digest(&manifest.core.weight_digest)?;
+        if let Some(ref schema) = manifest.machine_schema {
+            schema.validate()?;
+        }
+
+        let canonical_json =
+            manifest
+                .to_canonical_json()
+                .map_err(|e| K3Error::CapabilityMismatch {
+                    architecture: "cas_manifest".to_owned(),
+                    reason: format!("failed to serialize machine manifest to canonical JSON: {e}"),
+                })?;
+
+        self.persist_manifest_json(&manifest.core, canonical_json)
+    }
+
+    /// Loads and validates a [`MachineModelManifest`] by SHA-256 `manifest_digest`.
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] if `manifest_digest` is invalid, missing, corrupt,
+    /// or carries an invalid [`MachineFeatureSchema`].
+    pub fn load_manifest_with_schema(
+        &self,
+        manifest_digest: &str,
+    ) -> Result<MachineModelManifest, K3Error> {
+        validate_sha256_digest(manifest_digest)?;
+        let record = self
+            .catalog
+            .get_manifest(manifest_digest)
+            .map_err(|e| K3Error::CapabilityMismatch {
+                architecture: "cas_resolve".to_owned(),
+                reason: format!("catalog query failed for manifest '{manifest_digest}': {e}"),
+            })?
+            .ok_or_else(|| K3Error::CapabilityMismatch {
+                architecture: "cas_resolve".to_owned(),
+                reason: format!("manifest '{manifest_digest}' not found in catalog"),
+            })?;
+
+        let parsed: MachineModelManifest =
+            serde_json::from_str(&record.manifest_json).map_err(|e| {
+                K3Error::CapabilityMismatch {
+                    architecture: "cas_resolve".to_owned(),
+                    reason: format!("corrupt machine manifest JSON in catalog: {e}"),
+                }
+            })?;
+        if let Some(ref schema) = parsed.machine_schema {
+            schema.validate()?;
+        }
+        Ok(parsed)
+    }
+
+    /// Resolves and validates the optional [`MachineFeatureSchema`] for a `manifest_digest` or
+    /// `<source>/<namespace>/<name>/<tag>` alias identifier.
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] if the digest/alias cannot be resolved or fails schema
+    /// validation.
+    pub fn get_machine_schema(
+        &self,
+        manifest_digest_or_alias: &str,
+    ) -> Result<Option<MachineFeatureSchema>, K3Error> {
+        let digest = if manifest_digest_or_alias.contains('/') {
+            let (source, namespace, name, tag) = parse_alias_id(manifest_digest_or_alias)?;
+            let alias = self
+                .catalog
+                .find_alias(&source, &namespace, &name, &tag)
+                .map_err(|e| K3Error::CapabilityMismatch {
+                    architecture: "cas_resolve".to_owned(),
+                    reason: format!(
+                        "catalog query failed for alias '{manifest_digest_or_alias}': {e}"
+                    ),
+                })?
+                .ok_or_else(|| K3Error::CapabilityMismatch {
+                    architecture: "cas_resolve".to_owned(),
+                    reason: format!("model alias '{manifest_digest_or_alias}' is not registered"),
+                })?;
+            alias.manifest_digest
+        } else {
+            validate_sha256_digest(manifest_digest_or_alias)?;
+            manifest_digest_or_alias.to_owned()
+        };
+
+        Ok(self.load_manifest_with_schema(&digest)?.machine_schema)
     }
 
     /// Creates a human-browsable alias directory in `models/<source>/<namespace>/<name>/<tag>`
@@ -1134,5 +1528,220 @@ impl ContentAddressedStore {
         let _ = fs::remove_dir(&s_dir);
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::DuckDbPersistenceStore;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let seq = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("{prefix}_{}_{seq}", std::process::id()));
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn test_machine_feature_schema_and_manifest_canonical_json() {
+        let mut mappings = BTreeMap::new();
+        mappings.insert(
+            "anomaly".to_owned(),
+            MachineEventRule {
+                event_code: "STAGE_RESCHEDULE".to_owned(),
+                target_subsystem: "ActionRunner".to_owned(),
+                enter_threshold: Some(0.82),
+                exit_threshold: Some(0.40),
+                cooldown_ms: Some(5000),
+            },
+        );
+        let schema = MachineFeatureSchema {
+            feature_names: vec!["cpu_util".to_owned(), "queue_depth".to_owned()],
+            feature_types: vec!["f32".to_owned(), "f32".to_owned()],
+            zscore_mean: vec![0.45, 4.0],
+            zscore_std: vec![0.15, 2.0],
+            event_mappings: mappings,
+        };
+        schema.validate().expect("valid schema");
+        assert_ne!(schema.schema_hash(), 0);
+        let normalized = schema
+            .normalize_features(&[0.60, 8.0], 10.0)
+            .expect("normalize features");
+        assert!((normalized[0] - 1.0).abs() < 1e-5);
+        assert!((normalized[1] - 2.0).abs() < 1e-5);
+
+        let digest = "a".repeat(64);
+        let core_plain = ModelManifest::new("gguf", "ttm", "1.0.0", "F32", 512, digest, 32);
+        let wrapped_none = MachineModelManifest::from_core(core_plain.clone());
+        assert_eq!(
+            wrapped_none.to_canonical_json().unwrap(),
+            core_plain.to_canonical_json().unwrap()
+        );
+        assert_eq!(
+            wrapped_none.manifest_digest().unwrap(),
+            core_plain.manifest_digest().unwrap()
+        );
+
+        let with_schema =
+            MachineModelManifest::new(core_plain.clone(), Some(schema.clone())).expect("valid");
+        let parsed: MachineModelManifest =
+            serde_json::from_str(&with_schema.to_canonical_json().unwrap()).expect("roundtrip");
+        assert_eq!(parsed, with_schema);
+        assert_ne!(
+            with_schema.manifest_digest().unwrap(),
+            core_plain.manifest_digest().unwrap()
+        );
+
+        let bad_schema = MachineFeatureSchema {
+            zscore_std: vec![0.15, 0.0],
+            ..schema
+        };
+        assert!(MachineModelManifest::new(core_plain, Some(bad_schema)).is_err());
+    }
+
+    fn stage_and_promote_test_gguf(store: &ContentAddressedStore) -> (String, u64) {
+        let mut weight_bytes = Vec::with_capacity(32);
+        weight_bytes.extend_from_slice(b"GGUF");
+        weight_bytes.extend_from_slice(&3u32.to_le_bytes());
+        weight_bytes.extend_from_slice(&0u64.to_le_bytes());
+        weight_bytes.extend_from_slice(&0u64.to_le_bytes());
+        weight_bytes.extend_from_slice(b"TTM_DATA");
+        let weight_digest = Sha256::digest(&weight_bytes);
+        let weight_size_bytes = u64::try_from(weight_bytes.len()).expect("len u64");
+
+        let (staging_path, mut staging_file) = store.create_staging_file().expect("staging file");
+        staging_file.write_all(&weight_bytes).expect("write bytes");
+        staging_file.flush().expect("flush");
+        drop(staging_file);
+        store
+            .promote_staged_blob(&staging_path, &weight_digest, "gguf")
+            .expect("promote blob");
+        (weight_digest, weight_size_bytes)
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_model_manifest_machine_schema_roundtrip() {
+        let dir = TempDirGuard::new("k3_machine_schema_cas_test");
+        let db_path = dir.path().join("catalog.duckdb");
+        let catalog = Arc::new(DuckDbPersistenceStore::open(&db_path).expect("open catalog"));
+        let store =
+            ContentAddressedStore::open(dir.path(), Arc::clone(&catalog) as Arc<dyn CasCatalog>)
+                .expect("open cas");
+
+        let (weight_digest, weight_size_bytes) = stage_and_promote_test_gguf(&store);
+        let core_plain = ModelManifest::new(
+            "gguf",
+            "ttm",
+            "1.0.0",
+            "F32",
+            512,
+            weight_digest,
+            weight_size_bytes,
+        );
+
+        let mut mappings = BTreeMap::new();
+        mappings.insert(
+            "anomaly".to_owned(),
+            MachineEventRule {
+                event_code: "STAGE_RESCHEDULE".to_owned(),
+                target_subsystem: "ActionRunner".to_owned(),
+                enter_threshold: Some(0.82),
+                exit_threshold: Some(0.40),
+                cooldown_ms: Some(5000),
+            },
+        );
+        let schema = MachineFeatureSchema {
+            feature_names: vec!["cpu_util".to_owned(), "queue_depth".to_owned()],
+            feature_types: vec!["f32".to_owned(), "f32".to_owned()],
+            zscore_mean: vec![0.45, 4.0],
+            zscore_std: vec![0.15, 2.0],
+            event_mappings: mappings,
+        };
+        let manifest =
+            MachineModelManifest::new(core_plain.clone(), Some(schema.clone())).expect("valid");
+        let rec = store
+            .register_machine_manifest(&manifest)
+            .expect("register machine manifest");
+        assert_ne!(
+            rec.manifest_digest,
+            core_plain.manifest_digest().unwrap(),
+            "machine_schema must participate in content-addressed manifest digest"
+        );
+
+        // Verify DuckDB machine_schema_json sidecar column was populated
+        let schema_col = catalog
+            .get_machine_schema_json(&rec.manifest_digest)
+            .expect("query schema column")
+            .expect("machine_schema_json column populated");
+        let parsed_col: MachineFeatureSchema =
+            serde_json::from_str(&schema_col).expect("parse machine_schema_json column");
+        assert_eq!(parsed_col, schema);
+
+        // Bind alias & verify lookup via digest and alias
+        store
+            .create_alias(
+                "local",
+                "telemetry",
+                "ttm-guard",
+                "latest",
+                &rec.manifest_digest,
+            )
+            .expect("create alias");
+        let loaded = store
+            .load_manifest_with_schema(&rec.manifest_digest)
+            .expect("load manifest with schema");
+        assert_eq!(loaded, manifest);
+        assert_eq!(
+            store
+                .get_machine_schema("local/telemetry/ttm-guard/latest")
+                .expect("resolve schema by alias"),
+            Some(schema.clone())
+        );
+
+        // Invalid schema (zscore_std <= 0) must fail upfront
+        let bad_schema = MachineFeatureSchema {
+            zscore_std: vec![0.15, 0.0],
+            ..schema
+        };
+        assert!(MachineModelManifest::new(core_plain, Some(bad_schema)).is_err());
+
+        // Reopen existing DuckDB catalog after drop and confirm schema persists cleanly
+        drop(store);
+        drop(catalog);
+        let reopened_catalog =
+            Arc::new(DuckDbPersistenceStore::open(&db_path).expect("reopen catalog"));
+        let reopened_store = ContentAddressedStore::open(
+            dir.path(),
+            Arc::clone(&reopened_catalog) as Arc<dyn CasCatalog>,
+        )
+        .expect("reopen store");
+        let reloaded = reopened_store
+            .load_manifest_with_schema(&rec.manifest_digest)
+            .expect("reload after restart");
+        assert_eq!(reloaded, manifest);
+        assert!(
+            reopened_catalog
+                .get_machine_schema_json(&rec.manifest_digest)
+                .expect("query after reopen")
+                .is_some()
+        );
     }
 }

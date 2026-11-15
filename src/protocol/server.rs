@@ -27,7 +27,7 @@ use crate::protocol::mr_endpoints::{
 use crate::protocol::openai::OpenAiAdapter;
 use crate::protocol::types::{
     DEFAULT_MAX_REQUEST_BODY_BYTES, DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest,
-    HttpRequest, HttpResponse, HttpResponseBody,
+    HttpRequest, HttpResponse, HttpResponseBody, MachineInferRequest,
 };
 use crate::runtime::ControlPlaneRuntime;
 
@@ -202,6 +202,8 @@ impl ProtocolServer {
             ClaudeAdapter::handle_http(req, Arc::clone(&self.runtime)).await
         } else if path == "/v1/guardrail/evaluate" || path == "/guardrail/evaluate" {
             handle_guardrail_evaluate(req, Arc::clone(&self.runtime)).await
+        } else if path == "/v1/machine/infer" || path == "/machine/infer" {
+            handle_machine_infer(req, Arc::clone(&self.runtime)).await
         } else if path == "/api/mr/v1/status" {
             handle_mr_status(&req, peer_ip, &self.runtime, &self.mr_config)
         } else if path == "/api/mr/v1/connection" {
@@ -474,49 +476,40 @@ impl ProtocolServer {
     }
 }
 
-/// Handles `POST /v1/guardrail/evaluate` requests (`#39`, `#40`), failing closed on
-/// malformed requests (`400`), missing models (`404`), non-POST methods (`405`),
-/// or crashed/unresponsive guardrail workers (`503`).
-pub async fn handle_guardrail_evaluate(
-    req: HttpRequest,
-    runtime: Arc<ControlPlaneRuntime>,
+fn method_not_allowed_response(method: &str, route: &str) -> HttpResponse {
+    let json = serde_json::json!({
+        "error": {
+            "message": format!("Method '{method}' not allowed for {route}; use POST"),
+            "type": "invalid_request_error",
+            "code": "method_not_allowed"
+        }
+    })
+    .to_string();
+    HttpResponse::error(405, json, vec![("Allow".to_owned(), "POST".to_owned())])
+}
+
+fn malformed_json_response(err: &serde_json::Error) -> HttpResponse {
+    let json = serde_json::json!({
+        "error": {
+            "message": format!("Malformed JSON request body: {err}"),
+            "type": "invalid_request_error",
+            "code": "invalid_json"
+        }
+    })
+    .to_string();
+    HttpResponse::error(400, json, Vec::new())
+}
+
+fn map_manager_error_to_http(
+    service_label: &str,
+    unavailable_code: &str,
+    err: ManagerError,
 ) -> HttpResponse {
-    if req.method != "POST" {
-        let json = serde_json::json!({
-            "error": {
-                "message": format!("Method '{}' not allowed for /v1/guardrail/evaluate; use POST", req.method),
-                "type": "invalid_request_error",
-                "code": "method_not_allowed"
-            }
-        })
-        .to_string();
-        return HttpResponse::error(405, json, vec![("Allow".to_owned(), "POST".to_owned())]);
-    }
-
-    let eval_req: GuardrailEvaluateRequest = match serde_json::from_slice(&req.body) {
-        Ok(parsed) => parsed,
-        Err(e) => {
+    match err {
+        ManagerError::ModelNotFound(model_id) => {
             let json = serde_json::json!({
                 "error": {
-                    "message": format!("Malformed JSON request body: {e}"),
-                    "type": "invalid_request_error",
-                    "code": "invalid_json"
-                }
-            })
-            .to_string();
-            return HttpResponse::error(400, json, Vec::new());
-        }
-    };
-
-    match runtime.evaluate_guardrail(&eval_req) {
-        Ok(verdict) => {
-            let json = serde_json::to_string_pretty(&verdict).unwrap_or_else(|_| "{}".to_owned());
-            HttpResponse::json(200, json)
-        }
-        Err(ManagerError::ModelNotFound(model_id)) => {
-            let json = serde_json::json!({
-                "error": {
-                    "message": format!("Guardrail model '{model_id}' not loaded or does not exist"),
+                    "message": format!("{service_label} model '{model_id}' not loaded or does not exist"),
                     "type": "not_found_error",
                     "code": "model_not_found"
                 }
@@ -524,7 +517,7 @@ pub async fn handle_guardrail_evaluate(
             .to_string();
             HttpResponse::error(404, json, Vec::new())
         }
-        Err(ManagerError::Protocol(msg)) => {
+        ManagerError::Protocol(msg) => {
             let json = serde_json::json!({
                 "error": {
                     "message": msg,
@@ -535,23 +528,32 @@ pub async fn handle_guardrail_evaluate(
             .to_string();
             HttpResponse::error(400, json, Vec::new())
         }
-        Err(
-            err @ (ManagerError::WorkerCrashed { .. } | ManagerError::WorkerUnresponsive { .. }),
-        ) => {
+        ManagerError::TensorBounds(k3_err) => {
             let json = serde_json::json!({
                 "error": {
-                    "message": format!("Guardrail worker unavailable (fail-closed): {err}"),
-                    "type": "guardrail_unavailable",
-                    "code": "guardrail_unavailable"
+                    "message": k3_err.to_string(),
+                    "type": "invalid_request_error",
+                    "code": "invalid_tensor_bounds"
+                }
+            })
+            .to_string();
+            HttpResponse::error(400, json, Vec::new())
+        }
+        err @ (ManagerError::WorkerCrashed { .. } | ManagerError::WorkerUnresponsive { .. }) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": format!("{service_label} worker unavailable (fail-closed): {err}"),
+                    "type": unavailable_code,
+                    "code": unavailable_code
                 }
             })
             .to_string();
             HttpResponse::error(503, json, Vec::new())
         }
-        Err(err) => {
+        err => {
             let json = serde_json::json!({
                 "error": {
-                    "message": format!("Guardrail evaluation failed (fail-closed): {err}"),
+                    "message": format!("{service_label} evaluation failed (fail-closed): {err}"),
                     "type": "internal_server_error",
                     "code": "internal_server_error"
                 }
@@ -559,5 +561,55 @@ pub async fn handle_guardrail_evaluate(
             .to_string();
             HttpResponse::error(500, json, Vec::new())
         }
+    }
+}
+
+/// Handles `POST /v1/guardrail/evaluate` requests (`#39`, `#40`), failing closed on
+/// malformed requests (`400`), missing models (`404`), non-POST methods (`405`),
+/// or crashed/unresponsive guardrail workers (`503`).
+pub async fn handle_guardrail_evaluate(
+    req: HttpRequest,
+    runtime: Arc<ControlPlaneRuntime>,
+) -> HttpResponse {
+    if req.method != "POST" {
+        return method_not_allowed_response(&req.method, "/v1/guardrail/evaluate");
+    }
+
+    let eval_req: GuardrailEvaluateRequest = match serde_json::from_slice(&req.body) {
+        Ok(parsed) => parsed,
+        Err(e) => return malformed_json_response(&e),
+    };
+
+    match runtime.evaluate_guardrail(&eval_req) {
+        Ok(verdict) => {
+            let json = serde_json::to_string_pretty(&verdict).unwrap_or_else(|_| "{}".to_owned());
+            HttpResponse::json(200, json)
+        }
+        Err(err) => map_manager_error_to_http("Guardrail", "guardrail_unavailable", err),
+    }
+}
+
+/// Handles `POST /v1/machine/infer` requests (`#44`, `#46`), failing closed on
+/// malformed/non-finite payloads (`400`), missing models (`404`), non-POST methods (`405`),
+/// or crashed/unresponsive machine-model workers (`503`).
+pub async fn handle_machine_infer(
+    req: HttpRequest,
+    runtime: Arc<ControlPlaneRuntime>,
+) -> HttpResponse {
+    if req.method != "POST" {
+        return method_not_allowed_response(&req.method, "/v1/machine/infer");
+    }
+
+    let infer_req: MachineInferRequest = match serde_json::from_slice(&req.body) {
+        Ok(parsed) => parsed,
+        Err(e) => return malformed_json_response(&e),
+    };
+
+    match runtime.evaluate_machine_infer(&infer_req) {
+        Ok(verdict) => {
+            let json = serde_json::to_string_pretty(&verdict).unwrap_or_else(|_| "{}".to_owned());
+            HttpResponse::json(200, json)
+        }
+        Err(err) => map_manager_error_to_http("Machine", "machine_worker_unavailable", err),
     }
 }

@@ -9,7 +9,9 @@ pub mod receiver;
 pub mod streamer;
 
 pub use memfd::{BOUNDED_MEMLOCK_CEILING_BYTES, FlightError, MemfdArena, TYPE_ID_FLIGHT_ARENA};
-pub use receiver::{FlightReceiver, FlightStream};
+pub use receiver::{
+    ExtractedFeatureMatrix, FlightReceiver, FlightStream, extract_feature_matrix_from_record_batch,
+};
 pub use streamer::{
     FlightSummary, FlightTensorBatchStreamer, IME_TILE_ELEMENTS, flight_tensor_schema,
 };

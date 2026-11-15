@@ -469,6 +469,9 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
     // 12. State-space (Mamba / RWKV) and hybrid SSM-transformer recipes
     register_ssm_and_hybrid_recipes(&mut map);
 
+    // 13. Machine-model non-LLM architectures (time-series, tabular, offline-RL control plane)
+    register_machine_model_recipes(&mut map);
+
     RwLock::new(map)
 });
 
@@ -536,6 +539,27 @@ fn register_ssm_and_hybrid_recipes(map: &mut HashMap<String, RecipeDescriptor>) 
                 target_layouts: layouts,
                 default_chat_template: Some(template.clone()),
                 special_tokens: Some(tokens.clone()),
+            },
+        );
+    }
+}
+
+fn register_machine_model_recipes(map: &mut HashMap<String, RecipeDescriptor>) {
+    let machine_quants: &[&str] = &[
+        "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+    ];
+    let layouts: &[&str] = &["native", "ime_tile_8x16"];
+
+    for arch in ["ttm", "ft-transformer", "tabpfn-v2", "decision-transformer"] {
+        map.insert(
+            format!("{arch}@1.0.0"),
+            RecipeDescriptor {
+                architecture_id: arch,
+                recipe_version: "1.0.0",
+                supported_quants: machine_quants,
+                target_layouts: layouts,
+                default_chat_template: None,
+                special_tokens: None,
             },
         );
     }
@@ -1427,6 +1451,59 @@ mod tests {
             let env = CapabilityFilter::align_prompt_environment(rwkv, "1.0.0").unwrap();
             assert!(env.chat_template.format_prompt("Hi").contains("User: Hi"));
             assert!(env.is_stop_token(0));
+        }
+    }
+
+    #[test]
+    fn test_machine_model_recipe_descriptors() {
+        let recipes = CapabilityFilter::supported_recipes();
+        let machine_archs = ["ttm", "ft-transformer", "tabpfn-v2", "decision-transformer"];
+
+        for arch in machine_archs {
+            assert!(
+                recipes.contains(&format!("{arch}@1.0.0")),
+                "missing recipe {arch}@1.0.0"
+            );
+            assert!(
+                CapabilityFilter::is_supported(arch, "1.0.0"),
+                "CapabilityFilter must support {arch}@1.0.0"
+            );
+            assert!(!CapabilityFilter::is_supported(arch, "2.0.0"));
+
+            for quant in ["F32", "F16", "BF16", "Q8_0", "Q4_K_M"] {
+                let manifest = ModelManifest::new(
+                    "gguf",
+                    arch,
+                    "1.0.0",
+                    quant,
+                    512,
+                    "sha256:machine_model",
+                    64_000_000,
+                );
+                let suit = CapabilityFilter::evaluate_candidate(&manifest);
+                assert!(
+                    suit.executable,
+                    "expected {arch} ({quant}) executable, got {:?}",
+                    suit.reason
+                );
+                let desc = CapabilityFilter::validate_model_manifest(&manifest)
+                    .unwrap_or_else(|e| panic!("manifest failed for {arch}/{quant}: {e}"));
+                assert_eq!(desc.target_layouts, &["native", "ime_tile_8x16"]);
+                assert!(desc.default_chat_template.is_none());
+            }
+
+            let unsupported_quant = ModelManifest::new(
+                "gguf",
+                arch,
+                "1.0.0",
+                "TQ1_0",
+                512,
+                "sha256:bad_machine_quant",
+                64_000_000,
+            );
+            assert!(
+                !CapabilityFilter::evaluate_candidate(&unsupported_quant).quantization_supported
+            );
         }
     }
 }
