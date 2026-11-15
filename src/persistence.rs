@@ -172,6 +172,16 @@ pub struct ModelBlobRecord {
     pub ref_count: u32,
 }
 
+fn extract_machine_schema_json(manifest_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(manifest_json).ok()?;
+    let schema = value.get("machine_schema")?;
+    if schema.is_null() {
+        None
+    } else {
+        serde_json::to_string(schema).ok()
+    }
+}
+
 /// Content-addressed model manifest record in `DuckDB` catalog (US-18, ADR-035).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelManifestRecord {
@@ -272,6 +282,12 @@ pub trait CasCatalog: fmt::Debug + Send + Sync {
         &self,
         manifest_digest: &str,
     ) -> Result<Option<ModelManifestRecord>, PersistenceError>;
+    fn get_machine_schema_json(
+        &self,
+        _manifest_digest: &str,
+    ) -> Result<Option<String>, PersistenceError> {
+        Ok(None)
+    }
     fn list_manifests(&self) -> Result<Vec<ModelManifestRecord>, PersistenceError>;
     fn delete_manifest(&self, manifest_digest: &str) -> Result<bool, PersistenceError>;
 
@@ -448,7 +464,16 @@ impl DuckDbPersistenceStore {
                 updated_at BIGINT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS model_blobs (
+            CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id);
+            CREATE INDEX IF NOT EXISTS idx_session_project ON session_last_turns(project_id);",
+        )?;
+        Self::init_cas_schema(&conn)?;
+        Ok(())
+    }
+
+    fn init_cas_schema(conn: &Connection) -> Result<(), PersistenceError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS model_blobs (
                 digest TEXT PRIMARY KEY NOT NULL,
                 size_bytes BIGINT NOT NULL,
                 blob_type TEXT NOT NULL,
@@ -468,8 +493,12 @@ impl DuckDbPersistenceStore {
                 license TEXT,
                 origin TEXT,
                 manifest_json TEXT NOT NULL,
+                machine_schema_json TEXT,
                 created_at BIGINT NOT NULL
             );
+
+            ALTER TABLE model_manifests
+                ADD COLUMN IF NOT EXISTS machine_schema_json TEXT;
 
             CREATE TABLE IF NOT EXISTS model_aliases (
                 alias_id TEXT PRIMARY KEY NOT NULL,
@@ -506,8 +535,6 @@ impl DuckDbPersistenceStore {
                 updated_at BIGINT NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id);
-            CREATE INDEX IF NOT EXISTS idx_session_project ON session_last_turns(project_id);
             CREATE INDEX IF NOT EXISTS idx_manifest_weights ON model_manifests(weight_digest);
             CREATE INDEX IF NOT EXISTS idx_alias_manifest ON model_aliases(manifest_digest);
             CREATE INDEX IF NOT EXISTS idx_alias_lookup ON model_aliases(source, namespace, name, tag);
@@ -1079,6 +1106,7 @@ impl CasCatalog for DuckDbPersistenceStore {
     }
 
     fn save_manifest(&self, manifest: &ModelManifestRecord) -> Result<(), PersistenceError> {
+        let machine_schema_json = extract_machine_schema_json(&manifest.manifest_json);
         let conn = self
             .conn
             .lock()
@@ -1088,8 +1116,8 @@ impl CasCatalog for DuckDbPersistenceStore {
             "INSERT INTO model_manifests (
                 manifest_digest, weight_digest, format, architecture_id,
                 recipe_version, quantization, context_length, license,
-                origin, manifest_json, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                origin, manifest_json, machine_schema_json, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT (manifest_digest) DO UPDATE SET
                 weight_digest = excluded.weight_digest,
                 format = excluded.format,
@@ -1100,6 +1128,7 @@ impl CasCatalog for DuckDbPersistenceStore {
                 license = excluded.license,
                 origin = excluded.origin,
                 manifest_json = excluded.manifest_json,
+                machine_schema_json = excluded.machine_schema_json,
                 created_at = excluded.created_at;",
             params![
                 manifest.manifest_digest,
@@ -1112,10 +1141,30 @@ impl CasCatalog for DuckDbPersistenceStore {
                 manifest.license,
                 manifest.origin,
                 manifest.manifest_json,
+                machine_schema_json,
                 manifest.created_at,
             ],
         )?;
         Ok(())
+    }
+
+    fn get_machine_schema_json(
+        &self,
+        manifest_digest: &str,
+    ) -> Result<Option<String>, PersistenceError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| PersistenceError::LockError(e.to_string()))?;
+        let res = conn
+            .query_row(
+                "SELECT machine_schema_json FROM model_manifests WHERE manifest_digest = ?1;",
+                params![manifest_digest],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(res)
     }
 
     fn get_manifest(

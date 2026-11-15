@@ -16,8 +16,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::capacity::ControlPlaneScheduler;
+use crate::dispatch::{HysteresisEventTranslator, SystemEventPayload};
 use crate::domain::{OsAffinityBackend, RealOsAffinityBackend};
 use crate::error::ManagerError;
+use crate::flight::extract_feature_matrix_from_record_batch;
 use crate::persistence::{
     DiagnosticReplayResult, PersistenceError, PersistenceStore, SqlitePersistenceStore,
 };
@@ -26,10 +28,14 @@ use crate::prompt::{
     ChatTemplate, GgufTokenizer, IncrementalStopDetector, PreparedPrompt, PromptOrchestrator,
     PromptPreparationRequest, SpecialTokens, Tokenizer, normalize_guardrail_input,
 };
-use crate::protocol::{GuardrailEvaluateRequest, GuardrailEvaluateResponse, GuardrailPolicy};
+use crate::protocol::{
+    GuardrailEvaluateRequest, GuardrailEvaluateResponse, GuardrailPolicy, MachineInferRequest,
+    MachineInferResponse,
+};
 use crate::queue::AdmissionQueueManager;
 use crate::router::DecisionRouter;
 use crate::scheduler::MultiModelScheduler;
+use crate::store::MachineFeatureSchema;
 use crate::telemetry::{
     InferenceTelemetryRecord, K3ClusterTarget, MuObserveTelemetryStreamer,
     estimate_bounded_kv_memlock_kb, resolve_or_create_trace_context,
@@ -422,10 +428,35 @@ pub type GuardrailEvaluatorFn = dyn Fn(&GuardrailEvaluateRequest) -> Result<Guar
     + Send
     + Sync;
 
+/// Type alias for custom or test-injected machine-model inference evaluators
+/// receiving `(request, sanitized_row_major_features)`.
+pub type MachineInferEvaluatorFn =
+    dyn Fn(&MachineInferRequest, &[f32]) -> Result<Vec<f32>, ManagerError> + Send + Sync;
+
 #[derive(Default)]
 struct GuardrailRuntimeState {
     policy: RwLock<Option<GuardrailPolicy>>,
     evaluator: RwLock<Option<Arc<GuardrailEvaluatorFn>>>,
+}
+
+#[derive(Default)]
+struct MachineRuntimeState {
+    schemas: RwLock<HashMap<String, MachineFeatureSchema>>,
+    translators: RwLock<HashMap<String, HysteresisEventTranslator>>,
+    evaluator: RwLock<Option<Arc<MachineInferEvaluatorFn>>>,
+}
+
+impl fmt::Debug for MachineRuntimeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let schema_count = self.schemas.read().map_or(0, |guard| guard.len());
+        let translator_count = self.translators.read().map_or(0, |guard| guard.len());
+        let has_evaluator = self.evaluator.read().is_ok_and(|guard| guard.is_some());
+        f.debug_struct("MachineRuntimeState")
+            .field("schema_count", &schema_count)
+            .field("translator_count", &translator_count)
+            .field("has_evaluator", &has_evaluator)
+            .finish()
+    }
 }
 
 impl fmt::Debug for GuardrailRuntimeState {
@@ -512,6 +543,7 @@ pub struct ControlPlaneRuntime {
     persistence: Arc<dyn PersistenceStore>,
     telemetry: Arc<MuObserveTelemetryStreamer>,
     guardrail: Arc<GuardrailRuntimeState>,
+    machine: Arc<MachineRuntimeState>,
 }
 
 impl ControlPlaneRuntime {
@@ -627,6 +659,7 @@ impl ControlPlaneRuntime {
             persistence,
             telemetry,
             guardrail: Arc::new(GuardrailRuntimeState::default()),
+            machine: Arc::new(MachineRuntimeState::default()),
         })
     }
 
@@ -667,6 +700,420 @@ impl ControlPlaneRuntime {
             .unwrap_or_else(PoisonError::into_inner) = None;
     }
 
+    fn check_alive_placement(&self, model_id: &str) -> Result<(), ManagerError> {
+        let map = self
+            .placements
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let record = map
+            .get(model_id)
+            .ok_or_else(|| ManagerError::ModelNotFound(model_id.to_owned()))?;
+        if !record.is_alive {
+            return Err(ManagerError::WorkerCrashed {
+                model_id: model_id.to_owned(),
+                exit_code: Some(1),
+                signal: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// Registers a validated [`MachineFeatureSchema`] for `model_id`, initializing a stateful
+    /// [`HysteresisEventTranslator`] when `schema.primary_event_rule()` defines a sink mapping.
+    ///
+    /// # Errors
+    /// Returns [`ManagerError`] if `model_id` is empty or `schema` validation fails.
+    pub fn register_machine_schema(
+        &self,
+        model_id: impl Into<String>,
+        schema: MachineFeatureSchema,
+    ) -> Result<(), ManagerError> {
+        let model_id = model_id.into();
+        if model_id.trim().is_empty() {
+            return Err(ManagerError::Protocol(
+                "machine model id must not be empty".to_owned(),
+            ));
+        }
+        schema.validate().map_err(ManagerError::TensorBounds)?;
+
+        if let Some((_, rule)) = schema.primary_event_rule() {
+            let enter = rule.enter_threshold.unwrap_or(0.75);
+            let exit = rule.exit_threshold.unwrap_or(0.35);
+            let cooldown_ms = rule.cooldown_ms.unwrap_or(5_000);
+            let translator = HysteresisEventTranslator::new(
+                enter,
+                exit,
+                cooldown_ms,
+                rule.event_code.clone(),
+                rule.target_subsystem.clone(),
+            )?
+            .with_feature_stats(
+                schema.feature_names.clone(),
+                schema.zscore_mean.clone(),
+                schema.zscore_std.clone(),
+            )?;
+            self.machine
+                .translators
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(model_id.clone(), translator);
+        }
+
+        self.machine
+            .schemas
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(model_id, schema);
+        Ok(())
+    }
+
+    /// Installs or replaces the stateful [`HysteresisEventTranslator`] bound to `model_id`.
+    pub fn set_machine_hysteresis_translator(
+        &self,
+        model_id: impl Into<String>,
+        translator: HysteresisEventTranslator,
+    ) {
+        self.machine
+            .translators
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(model_id.into(), translator);
+    }
+
+    /// Installs a custom machine-model inference evaluator hook for deterministic or worker tests.
+    pub fn set_machine_infer_evaluator(&self, evaluator: Arc<MachineInferEvaluatorFn>) {
+        *self
+            .machine
+            .evaluator
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(evaluator);
+    }
+
+    /// Removes any custom machine-model inference evaluator hook.
+    pub fn clear_machine_infer_evaluator(&self) {
+        *self
+            .machine
+            .evaluator
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Extracts numeric features from an Arrow [`arrow_array::RecordBatch`] and executes
+    /// machine inference via [`Self::evaluate_machine_infer`].
+    ///
+    /// # Errors
+    /// Returns [`ManagerError`] if Arrow batch extraction, schema validation, placement checks,
+    /// or evaluation fails.
+    pub fn evaluate_machine_record_batch(
+        &self,
+        model: &str,
+        batch: &arrow_array::RecordBatch,
+        expected_columns: Option<&[&str]>,
+        timestamp_ms: Option<u64>,
+    ) -> Result<MachineInferResponse, ManagerError> {
+        let schema_cols: Option<Vec<String>> = self
+            .machine
+            .schemas
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(model)
+            .map(|s| s.feature_names.clone());
+
+        let extracted = if let Some(expected) = expected_columns {
+            extract_feature_matrix_from_record_batch(batch, Some(expected))
+        } else if let Some(ref cols) = schema_cols {
+            let col_refs: Vec<&str> = cols.iter().map(String::as_str).collect();
+            extract_feature_matrix_from_record_batch(batch, Some(&col_refs))
+        } else {
+            extract_feature_matrix_from_record_batch(batch, None)
+        }
+        .map_err(|e| ManagerError::Protocol(e.to_string()))?;
+
+        let num_rows = u32::try_from(extracted.num_rows)
+            .map_err(|_| ManagerError::Protocol("batch row count exceeds u32".to_owned()))?;
+        let num_cols = u32::try_from(extracted.num_cols)
+            .map_err(|_| ManagerError::Protocol("batch column count exceeds u32".to_owned()))?;
+
+        self.evaluate_machine_infer(&MachineInferRequest {
+            model: model.to_owned(),
+            features: extracted.values,
+            rows: None,
+            num_rows: Some(num_rows),
+            num_cols: Some(num_cols),
+            clip_sigma: None,
+            timestamp_ms,
+            already_normalized: false,
+        })
+    }
+
+    fn flatten_machine_features(
+        req: &MachineInferRequest,
+    ) -> Result<(Vec<f32>, Option<usize>), ManagerError> {
+        let (raw_features, inferred_cols) = if let Some(ref rows) = req.rows {
+            if !req.features.is_empty() {
+                return Err(ManagerError::Protocol(
+                    "specify either flat 'features' or 2D 'rows', not both".to_owned(),
+                ));
+            }
+            if rows.is_empty() || rows[0].is_empty() {
+                return Err(ManagerError::Protocol(
+                    "machine 'rows' matrix must be non-empty".to_owned(),
+                ));
+            }
+            let cols = rows[0].len();
+            let mut flat = Vec::with_capacity(rows.len().saturating_mul(cols));
+            for (r_idx, row) in rows.iter().enumerate() {
+                if row.len() != cols {
+                    return Err(ManagerError::Protocol(format!(
+                        "machine row {r_idx} has {len} columns; expected {cols}",
+                        len = row.len()
+                    )));
+                }
+                flat.extend_from_slice(row);
+            }
+            (flat, Some(cols))
+        } else {
+            (req.features.clone(), None)
+        };
+
+        if raw_features.is_empty() {
+            return Err(ManagerError::Protocol(
+                "machine 'features' input must not be empty".to_owned(),
+            ));
+        }
+        if !raw_features.iter().all(|v| v.is_finite()) {
+            return Err(ManagerError::Protocol(
+                "machine input features must all be finite f32 values".to_owned(),
+            ));
+        }
+        Ok((raw_features, inferred_cols))
+    }
+
+    fn resolve_and_validate_machine_features(
+        req: &MachineInferRequest,
+        schema_opt: Option<&MachineFeatureSchema>,
+    ) -> Result<(Vec<f32>, u32, u32, f32), ManagerError> {
+        let (raw_features, inferred_cols) = Self::flatten_machine_features(req)?;
+
+        let clip_sigma = req.clip_sigma.unwrap_or(10.0);
+        if !clip_sigma.is_finite() || clip_sigma <= 0.0 {
+            return Err(ManagerError::Protocol(format!(
+                "clip_sigma must be finite and positive, got {clip_sigma}"
+            )));
+        }
+
+        let cols_usize = if let Some(row_cols) = inferred_cols {
+            if let Some(explicit_cols) = req.num_cols
+                && usize::try_from(explicit_cols).unwrap_or(0) != row_cols
+            {
+                return Err(ManagerError::Protocol(format!(
+                    "num_cols ({explicit_cols}) does not match row width ({row_cols})"
+                )));
+            }
+            row_cols
+        } else if let Some(explicit_cols) = req.num_cols {
+            let c = usize::try_from(explicit_cols).unwrap_or(0);
+            if c == 0 {
+                return Err(ManagerError::Protocol(
+                    "num_cols must be strictly positive".to_owned(),
+                ));
+            }
+            c
+        } else if let Some(schema) = schema_opt {
+            schema.feature_names.len()
+        } else if let Some(explicit_rows) = req.num_rows {
+            let r = usize::try_from(explicit_rows).unwrap_or(0);
+            if r == 0 || !raw_features.len().is_multiple_of(r) {
+                return Err(ManagerError::Protocol(format!(
+                    "features length {} is not divisible by num_rows {explicit_rows}",
+                    raw_features.len()
+                )));
+            }
+            raw_features.len() / r
+        } else {
+            raw_features.len()
+        };
+
+        if cols_usize == 0 || !raw_features.len().is_multiple_of(cols_usize) {
+            return Err(ManagerError::Protocol(format!(
+                "features length {} is not divisible by num_cols {cols_usize}",
+                raw_features.len()
+            )));
+        }
+        let rows_usize = raw_features.len() / cols_usize;
+        if let Some(explicit_rows) = req.num_rows
+            && usize::try_from(explicit_rows).unwrap_or(0) != rows_usize
+        {
+            return Err(ManagerError::Protocol(format!(
+                "num_rows ({explicit_rows}) does not match inferred row count ({rows_usize})"
+            )));
+        }
+
+        if let Some(schema) = schema_opt
+            && cols_usize != schema.feature_names.len()
+        {
+            return Err(ManagerError::Protocol(format!(
+                "feature column count {cols_usize} does not match schema columns ({})",
+                schema.feature_names.len()
+            )));
+        }
+
+        let num_rows = u32::try_from(rows_usize)
+            .map_err(|_| ManagerError::Protocol("num_rows exceeds u32 range".to_owned()))?;
+        let num_cols = u32::try_from(cols_usize)
+            .map_err(|_| ManagerError::Protocol("num_cols exceeds u32 range".to_owned()))?;
+
+        Ok((raw_features, num_rows, num_cols, clip_sigma))
+    }
+
+    /// Validates, optionally normalizes against a registered [`MachineFeatureSchema`], evaluates,
+    /// and optionally translates outputs through a stateful [`HysteresisEventTranslator`] for
+    /// `POST /v1/machine/infer`.
+    ///
+    /// # Errors
+    /// - Returns [`ManagerError::Protocol`] / [`ManagerError::TensorBounds`] on empty/malformed/non-finite
+    ///   inputs or shape mismatches.
+    /// - Returns [`ManagerError::ModelNotFound`] (`404`) if `req.model` is not registered.
+    /// - Returns [`ManagerError::WorkerCrashed`] (`503`) if the model placement is not alive.
+    pub fn evaluate_machine_infer(
+        &self,
+        req: &MachineInferRequest,
+    ) -> Result<MachineInferResponse, ManagerError> {
+        if req.model.trim().is_empty() {
+            return Err(ManagerError::Protocol(
+                "machine model id must not be empty".to_owned(),
+            ));
+        }
+
+        self.check_alive_placement(&req.model)?;
+
+        let schema_opt = self
+            .machine
+            .schemas
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&req.model)
+            .cloned();
+
+        let (raw_features, num_rows, num_cols, clip_sigma) =
+            Self::resolve_and_validate_machine_features(req, schema_opt.as_ref())?;
+        let cols_usize = usize::try_from(num_cols).unwrap_or(0);
+        let rows_usize = usize::try_from(num_rows).unwrap_or(0);
+
+        let normalized_features = if !req.already_normalized
+            && let Some(ref schema) = schema_opt
+        {
+            schema
+                .normalize_features(&raw_features, clip_sigma)
+                .map_err(ManagerError::TensorBounds)?
+        } else {
+            raw_features.clone()
+        };
+
+        let evaluator = self
+            .machine
+            .evaluator
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+
+        let outputs = if let Some(eval_fn) = evaluator {
+            eval_fn(req, &normalized_features)?
+        } else {
+            let cols_f32 = f32::from(u16::try_from(num_cols).unwrap_or(u16::MAX));
+            normalized_features
+                .chunks_exact(cols_usize)
+                .map(|row| {
+                    let mean_sq = row.iter().map(|&v| v * v).sum::<f32>() / cols_f32.max(1.0);
+                    let rms = mean_sq.sqrt();
+                    1.0 / (1.0 + (-(rms - 2.0)).exp())
+                })
+                .collect()
+        };
+
+        if outputs.is_empty() || !outputs.iter().all(|v| v.is_finite()) {
+            return Err(ManagerError::Protocol(
+                "machine evaluator returned empty or non-finite output tensor".to_owned(),
+            ));
+        }
+
+        let emitted_event = self.evaluate_machine_events(
+            req,
+            schema_opt.as_ref(),
+            &raw_features,
+            &normalized_features,
+            rows_usize,
+            cols_usize,
+            &outputs,
+        );
+
+        Ok(MachineInferResponse {
+            model: req.model.clone(),
+            num_rows,
+            num_cols,
+            outputs,
+            emitted_event,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_machine_events(
+        &self,
+        req: &MachineInferRequest,
+        schema_opt: Option<&MachineFeatureSchema>,
+        raw_features: &[f32],
+        normalized_features: &[f32],
+        rows_usize: usize,
+        cols_usize: usize,
+        outputs: &[f32],
+    ) -> Option<SystemEventPayload> {
+        let now_ms = req.timestamp_ms.unwrap_or(0);
+        let mut translators = self
+            .machine
+            .translators
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let translator = translators.get_mut(&req.model)?;
+
+        let apply_stats = translator.has_zscore_stats() && !req.already_normalized;
+        let attr_input = if apply_stats {
+            raw_features
+        } else {
+            normalized_features
+        };
+        let schema_feature_names: Option<&[String]> = schema_opt
+            .filter(|_| translator.feature_names().is_empty())
+            .map(|s| s.feature_names.as_slice());
+
+        let mut eval_row = |scores: &[f32], feat_row: &[f32]| -> Option<SystemEventPayload> {
+            if apply_stats {
+                translator.evaluate_event(scores, feat_row, now_ms)
+            } else if let Some(names) = schema_feature_names {
+                translator
+                    .evaluate_event_with_stats(scores, feat_row, names, &[], &[], now_ms)
+                    .ok()
+                    .flatten()
+            } else {
+                translator.evaluate_event_pre_normalized(scores, feat_row, now_ms)
+            }
+        };
+
+        if rows_usize > 1 && outputs.len() == rows_usize {
+            let mut emitted_event = None;
+            for (row_idx, &score) in outputs.iter().enumerate() {
+                let start = row_idx * cols_usize;
+                let end = start + cols_usize;
+                if let Some(ev) = eval_row(&[score], &attr_input[start..end]) {
+                    emitted_event = Some(ev);
+                }
+            }
+            emitted_event
+        } else {
+            let last_start = (rows_usize - 1) * cols_usize;
+            eval_row(outputs, &attr_input[last_start..last_start + cols_usize])
+        }
+    }
+
     /// Evaluates a prompt and/or serialized tool-call payload against the specified guardrail worker,
     /// enforcing canonical UTF-8 normalization and strict fail-closed semantics (`#35`..`#40`).
     ///
@@ -696,22 +1143,7 @@ impl ControlPlaneRuntime {
             )));
         }
 
-        {
-            let map = self
-                .placements
-                .read()
-                .unwrap_or_else(PoisonError::into_inner);
-            let record = map
-                .get(&req.model)
-                .ok_or_else(|| ManagerError::ModelNotFound(req.model.clone()))?;
-            if !record.is_alive {
-                return Err(ManagerError::WorkerCrashed {
-                    model_id: req.model.clone(),
-                    exit_code: Some(1),
-                    signal: None,
-                });
-            }
-        }
+        self.check_alive_placement(&req.model)?;
 
         let canonical_input = normalize_guardrail_input(&req.input);
         let canonical_tool_calls = if let Some(ref tc_raw) = req.tool_calls_json {

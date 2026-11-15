@@ -8,7 +8,8 @@ pub mod sha256;
 
 pub use cas::{
     ContentAddressedStore, DEFAULT_STORE_ROOT, ENV_STORE_ROOT, MAX_PATH_COMPONENT_LEN,
-    ModelManifest, ResolvedAlias, parse_alias_id, validate_path_component, validate_sha256_digest,
+    MachineEventRule, MachineFeatureSchema, MachineModelManifest, ModelManifest, ResolvedAlias,
+    parse_alias_id, validate_path_component, validate_sha256_digest,
 };
 pub use derived::{
     DerivedBlobManager, DerivedResolution, RetentionPolicy, StaleRecipeOutcome,

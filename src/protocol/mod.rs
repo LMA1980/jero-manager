@@ -29,18 +29,19 @@ pub use mr_endpoints::{
 pub use openai::{OpenAiAdapter, audit_generated_tool_call};
 pub use server::{
     MAX_REQUEST_HEADERS_BYTES, ProtocolServer, ProtocolServerConfig, ServerError,
-    handle_guardrail_evaluate,
+    handle_guardrail_evaluate, handle_machine_infer,
 };
 pub use types::{
     ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse, ClaudeMessage,
     ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem, ClaudeSystemBlock,
     ClaudeThinkingConfig, ClaudeTool, ClaudeUsage, DEFAULT_MAX_REQUEST_BODY_BYTES,
     DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest, GuardrailEvaluateResponse,
-    GuardrailPolicy, HttpRequest, HttpResponse, HttpResponseBody, MessageContent,
-    OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice, OpenAiChunkDelta,
-    OpenAiChunkResponse, OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunction,
-    OpenAiFunctionCall, OpenAiFunctionCallChunk, OpenAiMessage, OpenAiResponseMessage, OpenAiStop,
-    OpenAiTool, OpenAiToolCall, OpenAiToolCallChunk, OpenAiUsage,
+    GuardrailPolicy, HttpRequest, HttpResponse, HttpResponseBody, MachineInferRequest,
+    MachineInferResponse, MessageContent, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
+    OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
+    OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiFunctionCallChunk,
+    OpenAiMessage, OpenAiResponseMessage, OpenAiStop, OpenAiTool, OpenAiToolCall,
+    OpenAiToolCallChunk, OpenAiUsage,
 };
 
 /// Shared fail-closed inline guardrail gate invoked by both OpenAI and Claude adapters

@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::dispatch::SystemEventPayload;
+
 /// Maximum allowed HTTP request body size (10 MB) to prevent resource exhaustion DoS.
 pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 10 * 1024 * 1024;
 
@@ -754,4 +756,48 @@ pub struct GuardrailEvaluateResponse {
     pub category: Option<String>,
     /// Guardrail model identifier that produced the verdict.
     pub model: String,
+}
+
+/// Request payload for `POST /v1/machine/infer` (`#44`, `#46`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MachineInferRequest {
+    /// Logical identifier of the registered machine model (`ttm`, `ft-transformer`, etc.).
+    pub model: String,
+    /// Flattened row-major input features (`[num_rows * num_cols]`).
+    #[serde(default)]
+    pub features: Vec<f32>,
+    /// Optional 2D row-major matrix representation (`[row][col]`) converted to flat `features`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<Vec<f32>>>,
+    /// Optional explicit row count (`u32` domain dimension).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_rows: Option<u32>,
+    /// Optional explicit feature column count (`u32` domain dimension).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_cols: Option<u32>,
+    /// Optional symmetric sigma clipping bound applied during schema z-score normalization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_sigma: Option<f32>,
+    /// Optional observation timestamp in milliseconds forwarded to stateful hysteresis sinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
+    /// When `true`, skips z-score normalization under the registered `MachineFeatureSchema`.
+    #[serde(default)]
+    pub already_normalized: bool,
+}
+
+/// Response payload returned by `POST /v1/machine/infer` (`#44`, `#46`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MachineInferResponse {
+    /// Machine model identifier that produced the outputs.
+    pub model: String,
+    /// Number of feature rows evaluated.
+    pub num_rows: u32,
+    /// Number of feature columns per row.
+    pub num_cols: u32,
+    /// Machine-model scalar anomaly/classification output scores.
+    pub outputs: Vec<f32>,
+    /// Optional deterministic Sink A system event emitted when hysteresis triggers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitted_event: Option<SystemEventPayload>,
 }

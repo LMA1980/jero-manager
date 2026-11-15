@@ -18,7 +18,14 @@
 use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 
-use arrow_array::{Array, BinaryArray, RecordBatch, UInt64Array};
+use arrow_array::types::{
+    Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
+use arrow_array::{
+    Array, ArrowPrimitiveType, BinaryArray, BooleanArray, PrimitiveArray, RecordBatch, UInt64Array,
+};
+use arrow_schema::DataType;
 use jero_core::K3Error;
 
 use super::memfd::{FlightError, MemfdArena};
@@ -212,5 +219,228 @@ impl FlightReceiver {
         receiver.finalize(None).map_err(K3Error::from)?;
 
         Ok(receiver.into_raw_fd())
+    }
+}
+
+/// Row-major `f32` feature matrix extracted from an Apache Arrow [`RecordBatch`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedFeatureMatrix {
+    /// Row-major tensor values with shape `[num_rows, num_cols]`.
+    pub values: Vec<f32>,
+    /// Number of feature rows.
+    pub num_rows: usize,
+    /// Number of feature columns.
+    pub num_cols: usize,
+    /// Schema column names in extraction order.
+    pub column_names: Vec<String>,
+}
+
+fn extract_primitive_column<T: ArrowPrimitiveType>(
+    col: &dyn Array,
+    col_name: &str,
+    convert: fn(T::Native) -> Option<f32>,
+) -> Result<Vec<f32>, FlightError> {
+    let arr = col
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| {
+            FlightError::InvalidBatch(format!(
+                "column '{col_name}' failed primitive downcast for {:?}",
+                col.data_type()
+            ))
+        })?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (row_idx, &raw) in arr.values().iter().enumerate() {
+        let converted = convert(raw).filter(|v| v.is_finite()).ok_or_else(|| {
+            FlightError::InvalidBatch(format!(
+                "column '{col_name}' row {row_idx} produced non-finite or overflowed f32 value"
+            ))
+        })?;
+        out.push(converted);
+    }
+    Ok(out)
+}
+
+fn extract_numeric_column(col: &dyn Array, col_name: &str) -> Result<Vec<f32>, FlightError> {
+    if col.null_count() > 0 {
+        return Err(FlightError::InvalidBatch(format!(
+            "column '{col_name}' contains {} null value(s); machine feature tensors must be dense",
+            col.null_count()
+        )));
+    }
+
+    match col.data_type() {
+        DataType::Float32 => extract_primitive_column::<Float32Type>(col, col_name, Some),
+        DataType::Float64 => extract_primitive_column::<Float64Type>(col, col_name, |v| {
+            if v.is_finite() { Some(v as f32) } else { None }
+        }),
+        DataType::Float16 => {
+            extract_primitive_column::<Float16Type>(col, col_name, |v| Some(v.to_f32()))
+        }
+        DataType::Int8 => {
+            extract_primitive_column::<Int8Type>(col, col_name, |v| Some(f32::from(v)))
+        }
+        DataType::Int16 => {
+            extract_primitive_column::<Int16Type>(col, col_name, |v| Some(f32::from(v)))
+        }
+        DataType::Int32 => extract_primitive_column::<Int32Type>(col, col_name, |v| Some(v as f32)),
+        DataType::Int64 => extract_primitive_column::<Int64Type>(col, col_name, |v| Some(v as f32)),
+        DataType::UInt8 => {
+            extract_primitive_column::<UInt8Type>(col, col_name, |v| Some(f32::from(v)))
+        }
+        DataType::UInt16 => {
+            extract_primitive_column::<UInt16Type>(col, col_name, |v| Some(f32::from(v)))
+        }
+        DataType::UInt32 => {
+            extract_primitive_column::<UInt32Type>(col, col_name, |v| Some(v as f32))
+        }
+        DataType::UInt64 => {
+            extract_primitive_column::<UInt64Type>(col, col_name, |v| Some(v as f32))
+        }
+        DataType::Boolean => {
+            let arr = col.as_any().downcast_ref::<BooleanArray>().ok_or_else(|| {
+                FlightError::InvalidBatch(format!(
+                    "column '{col_name}' failed BooleanArray downcast"
+                ))
+            })?;
+            Ok((0..arr.len())
+                .map(|row_idx| if arr.value(row_idx) { 1.0 } else { 0.0 })
+                .collect())
+        }
+        other => Err(FlightError::InvalidBatch(format!(
+            "column '{col_name}' has unsupported Arrow DataType {other:?} for feature matrix extraction"
+        ))),
+    }
+}
+
+/// Validates an Apache Arrow [`RecordBatch`] and extracts its numeric columns into a row-major
+/// dense `f32` matrix `[num_rows, num_cols]`.
+///
+/// Enforces fail-closed validation against empty batches, column schema mismatches (when
+/// `expected_columns` is provided), null entries, unsupported non-numeric types, and `NaN`/`±Inf`.
+pub fn extract_feature_matrix_from_record_batch(
+    batch: &RecordBatch,
+    expected_columns: Option<&[&str]>,
+) -> Result<ExtractedFeatureMatrix, FlightError> {
+    let num_rows = batch.num_rows();
+    let num_cols = batch.num_columns();
+    if num_rows == 0 || num_cols == 0 {
+        return Err(FlightError::InvalidBatch(format!(
+            "feature RecordBatch must be non-empty, got shape [{num_rows}, {num_cols}]"
+        )));
+    }
+
+    let schema = batch.schema();
+    if let Some(expected) = expected_columns {
+        if expected.len() != num_cols {
+            return Err(FlightError::InvalidBatch(format!(
+                "feature column count mismatch: expected {}, got {}",
+                expected.len(),
+                num_cols
+            )));
+        }
+        for (idx, &expected_name) in expected.iter().enumerate() {
+            let actual_name = schema.field(idx).name();
+            if actual_name != expected_name {
+                return Err(FlightError::InvalidBatch(format!(
+                    "feature column mismatch at index {idx}: expected '{expected_name}', got '{actual_name}'"
+                )));
+            }
+        }
+    }
+
+    let mut column_names = Vec::with_capacity(num_cols);
+    let mut column_data = Vec::with_capacity(num_cols);
+    for col_idx in 0..num_cols {
+        let col_name = schema.field(col_idx).name().clone();
+        let extracted = extract_numeric_column(batch.column(col_idx).as_ref(), &col_name)?;
+        column_names.push(col_name);
+        column_data.push(extracted);
+    }
+
+    let total_elems = num_rows.checked_mul(num_cols).ok_or_else(|| {
+        FlightError::InvalidBatch("feature matrix dimensions overflow".to_owned())
+    })?;
+    let mut values = vec![0.0_f32; total_elems];
+    for (col_idx, col_vals) in column_data.iter().enumerate() {
+        for (row_idx, &val) in col_vals.iter().enumerate() {
+            values[row_idx * num_cols + col_idx] = val;
+        }
+    }
+
+    Ok(ExtractedFeatureMatrix {
+        values,
+        num_rows,
+        num_cols,
+        column_names,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Float32Array, Float64Array, Int32Array, StringArray};
+    use arrow_schema::{Field, Schema};
+
+    use super::*;
+
+    #[test]
+    fn test_extract_feature_matrix_from_record_batch_mixed_types_and_fail_closed() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("cpu_util", DataType::Float32, false),
+            Field::new("mem_ratio", DataType::Float64, false),
+            Field::new("queue_len", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Float32Array::from(vec![0.25, 0.90])),
+                Arc::new(Float64Array::from(vec![0.40, 0.85])),
+                Arc::new(Int32Array::from(vec![3, 19])),
+            ],
+        )
+        .expect("build batch");
+
+        let extracted = extract_feature_matrix_from_record_batch(
+            &batch,
+            Some(&["cpu_util", "mem_ratio", "queue_len"]),
+        )
+        .expect("extract matrix");
+        assert_eq!(extracted.num_rows, 2);
+        assert_eq!(extracted.num_cols, 3);
+        assert_eq!(
+            extracted.column_names,
+            vec!["cpu_util", "mem_ratio", "queue_len"]
+        );
+        assert_eq!(extracted.values, vec![0.25, 0.40, 3.0, 0.90, 0.85, 19.0]);
+
+        // Schema name mismatch rejected
+        assert!(
+            extract_feature_matrix_from_record_batch(
+                &batch,
+                Some(&["cpu_util", "wrong_col", "queue_len"])
+            )
+            .is_err()
+        );
+
+        // NaN value fails closed
+        let nan_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float32Array::from(vec![0.25, f32::NAN])),
+                Arc::new(Float64Array::from(vec![0.40, 0.85])),
+                Arc::new(Int32Array::from(vec![3, 19])),
+            ],
+        )
+        .expect("build nan batch");
+        assert!(extract_feature_matrix_from_record_batch(&nan_batch, None).is_err());
+
+        // Unsupported string column rejected
+        let str_schema = Arc::new(Schema::new(vec![Field::new("tag", DataType::Utf8, false)]));
+        let str_batch =
+            RecordBatch::try_new(str_schema, vec![Arc::new(StringArray::from(vec!["bad"]))])
+                .expect("build string batch");
+        assert!(extract_feature_matrix_from_record_batch(&str_batch, None).is_err());
     }
 }

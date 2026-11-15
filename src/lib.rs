@@ -26,9 +26,9 @@ pub mod supervisor;
 pub mod telemetry;
 
 pub use flight::{
-    BOUNDED_MEMLOCK_CEILING_BYTES, FlightError, FlightReceiver, FlightStream, FlightSummary,
-    FlightTensorBatchStreamer, IME_TILE_ELEMENTS, MemfdArena, TYPE_ID_FLIGHT_ARENA,
-    flight_tensor_schema,
+    BOUNDED_MEMLOCK_CEILING_BYTES, ExtractedFeatureMatrix, FlightError, FlightReceiver,
+    FlightStream, FlightSummary, FlightTensorBatchStreamer, IME_TILE_ELEMENTS, MemfdArena,
+    TYPE_ID_FLIGHT_ARENA, extract_feature_matrix_from_record_batch, flight_tensor_schema,
 };
 pub use ingestion::{
     AuthStatus, GgufHeaderPrefix, HuggingFaceAdapter, IngestionError, LocalFileAdapter,
@@ -40,9 +40,10 @@ pub use ingestion::{
 pub use store::{
     AlignedPromptEnvironment, BlobUsageInfo, CandidateSuitability, CapabilityFilter,
     ContentAddressedStore, DEFAULT_STORE_ROOT, DerivedBlobManager, DerivedResolution,
-    ENV_STORE_ROOT, GcReport, HighWaterMarkWarning, MAX_PATH_COMPONENT_LEN, MockProcMapsScanner,
-    ModelManifest, ProcessMappingInfo, ProcessMapsScanner, RealProcMapsScanner, RecipeDescriptor,
-    ResolvedAlias, RetentionPolicy, Sha256, StaleRecipeOutcome, StorageGarbageCollector,
+    ENV_STORE_ROOT, GcReport, HighWaterMarkWarning, MAX_PATH_COMPONENT_LEN, MachineEventRule,
+    MachineFeatureSchema, MachineModelManifest, MockProcMapsScanner, ModelManifest,
+    ProcessMappingInfo, ProcessMapsScanner, RealProcMapsScanner, RecipeDescriptor, ResolvedAlias,
+    RetentionPolicy, Sha256, StaleRecipeOutcome, StorageGarbageCollector,
     check_derived_memory_admission, hex_encode, parse_alias_id, parse_llamaguard_hazard,
     repack_phi3_fused_tensor_ime_8x16, validate_path_component,
 };
@@ -51,16 +52,17 @@ pub use protocol::{
     AuthClock, ClaudeAdapter, ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails,
     ClaudeErrorResponse, ClaudeMessage, ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem,
     ClaudeThinkingConfig, ClaudeTool, ClaudeUsage, GuardrailEvaluateRequest,
-    GuardrailEvaluateResponse, GuardrailPolicy, ModelRunnerAuthBundle, ModelRunnerAuthPolicy,
-    ModelRunnerConnectionConfig, ModelRunnerConnectionResponse, ModelRunnerEndpointConfig,
-    ModelRunnerStatusResponse, OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
-    OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
-    OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage,
-    OpenAiStop, OpenAiTool, OpenAiToolCall, OpenAiUsage, POLICY_MR_MODELS_READ,
-    POLICY_MR_OPENAI_API_READ, POLICY_MR_QUEUE_READ, POLICY_MR_WIREGUARD_VPN_READ, ProtocolServer,
-    ProtocolServerConfig, RegisteredOperator, ResidentModelStatus, ThinkingTagParser,
-    WireGuardPeerSummary, audit_generated_tool_call, build_connection_response,
-    build_status_snapshot, handle_guardrail_evaluate, handle_mr_connection, handle_mr_status,
+    GuardrailEvaluateResponse, GuardrailPolicy, MachineInferRequest, MachineInferResponse,
+    ModelRunnerAuthBundle, ModelRunnerAuthPolicy, ModelRunnerConnectionConfig,
+    ModelRunnerConnectionResponse, ModelRunnerEndpointConfig, ModelRunnerStatusResponse,
+    OpenAiAdapter, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice,
+    OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunction,
+    OpenAiFunctionCall, OpenAiMessage, OpenAiResponseMessage, OpenAiStop, OpenAiTool,
+    OpenAiToolCall, OpenAiUsage, POLICY_MR_MODELS_READ, POLICY_MR_OPENAI_API_READ,
+    POLICY_MR_QUEUE_READ, POLICY_MR_WIREGUARD_VPN_READ, ProtocolServer, ProtocolServerConfig,
+    RegisteredOperator, ResidentModelStatus, ThinkingTagParser, WireGuardPeerSummary,
+    audit_generated_tool_call, build_connection_response, build_status_snapshot,
+    handle_guardrail_evaluate, handle_machine_infer, handle_mr_connection, handle_mr_status,
     redact_public_key_prefix,
 };
 
@@ -74,8 +76,9 @@ pub use capacity::{
 };
 pub use client::KvClient;
 pub use dispatch::{
-    ForwardPassRequest, ForwardPassResult, dispatch_forward_pass, wrap_input_tokens_as_arrow,
-    wrap_logits_as_float32_array,
+    DEFAULT_TOP_CAUSAL_FEATURES, ForwardPassRequest, ForwardPassResult, HysteresisEventTranslator,
+    SystemEventPayload, VALID_EVENT_TARGET_SUBSYSTEMS, dispatch_forward_pass,
+    validate_target_subsystem, wrap_input_tokens_as_arrow, wrap_logits_as_float32_array,
 };
 pub use domain::{
     CgroupFs, CgroupV2DomainController, DomainPlacementMode, IsolationDomainController,
@@ -109,9 +112,9 @@ pub use prompt::{
     OCTOPUS_NEXA_END_TOKEN, PreparedPrompt, PromptOrchestrator, PromptPreparationRequest,
     SimpleTokenizer, SpecialTokens, StreamingDetokenizer, TokenType, Tokenizer,
     XLAM_TOOL_CALL_TOKEN, evaluate_stop_token, format_chat_prompt, format_dory_chatml_prompt,
-    format_functiongemma_prompt, format_octopus_prompt, format_xlam_prompt,
-    is_functional_action_token, normalize_guardrail_input, resolve_dory_loop_budget,
-    validate_and_tokenize,
+    format_functiongemma_prompt, format_octopus_prompt, format_symbolic_machine_state,
+    format_xlam_prompt, is_functional_action_token, normalize_guardrail_input,
+    resolve_dory_loop_budget, validate_and_tokenize,
 };
 pub use queue::{
     AdmissionQueueConfig, AdmissionQueueManager, DEFAULT_ESTIMATED_PASS_LATENCY_MS,
@@ -126,8 +129,8 @@ pub use router::{
 };
 pub use runtime::{
     ActiveTaskRecord, AdminCommand, AdminResponse, ControlPlaneRuntime, DEFAULT_CONTROL_TASK_LEASE,
-    GuardrailEvaluatorFn, ModelAuditEvent, ModelAuditEventType, ModelPlacementRecord,
-    TaskLeaseSnapshot, WorkerHealthSnapshot,
+    GuardrailEvaluatorFn, MachineInferEvaluatorFn, ModelAuditEvent, ModelAuditEventType,
+    ModelPlacementRecord, TaskLeaseSnapshot, WorkerHealthSnapshot,
 };
 pub use scheduler::{
     DEFAULT_MAX_ACTIVE_MODELS, ModelExecutionMetrics, ModelSchedulerEntry, ModelSchedulingState,
