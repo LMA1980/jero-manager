@@ -805,17 +805,7 @@ fn test_multi_model_worker_placement_concurrent_supervisors() {
 fn create_dummy_gguf_weights(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!("k3_domain_test_{name}_{}.gguf", std::process::id()));
-    let magic: [u8; 4] = *b"GGUF";
-    let version: u32 = 3;
-    let tensor_count: u64 = 0;
-    let kv_count: u64 = 0;
-
-    let mut data = Vec::new();
-    data.extend_from_slice(&magic);
-    data.extend_from_slice(&version.to_le_bytes());
-    data.extend_from_slice(&tensor_count.to_le_bytes());
-    data.extend_from_slice(&kv_count.to_le_bytes());
-
+    let data = jero_core::test_helpers::create_synthetic_gguf_v3("synthetic", 32, &[]);
     std::fs::write(&p, data).expect("write dummy gguf");
     p
 }
