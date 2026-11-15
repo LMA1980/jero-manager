@@ -575,6 +575,12 @@ impl HysteresisEventTranslator {
         !self.zscore_mean.is_empty() && !self.zscore_std.is_empty()
     }
 
+    /// Returns the ordered feature column names bound on this translator.
+    #[must_use]
+    pub fn feature_names(&self) -> &[String] {
+        &self.feature_names
+    }
+
     /// Returns whether the translator is currently latched in its active state.
     #[must_use]
     pub const fn is_active(&self) -> bool {
@@ -690,33 +696,12 @@ impl HysteresisEventTranslator {
         )
     }
 
-    /// Evaluates model output scores and input features at `now_ms`, emitting a
-    /// [`SystemEventPayload`] with top-K causal feature attribution when hysteresis triggers.
-    ///
-    /// Fails closed (returns `None` without mutating translator state) if inputs contain
-    /// non-finite values, `outputs` is empty, or bound normalization stats mismatch `features`.
-    pub fn evaluate_event(
+    fn emit_event_from_ranked(
         &mut self,
         outputs: &[f32],
-        features: &[f32],
+        top_causal_features: Vec<(String, f32)>,
         now_ms: u64,
     ) -> Option<SystemEventPayload> {
-        if outputs.is_empty()
-            || !outputs.iter().all(|v| v.is_finite())
-            || self.event_code.trim().is_empty()
-            || validate_target_subsystem(&self.target_subsystem).is_err()
-        {
-            return None;
-        }
-
-        let top_causal_features = Self::rank_top_causal_features(
-            features,
-            &self.feature_names,
-            &self.zscore_mean,
-            &self.zscore_std,
-            self.top_k_features,
-        )?;
-
         let confidence = outputs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         if !self.evaluate_score(confidence, now_ms) {
             return None;
@@ -729,6 +714,64 @@ impl HysteresisEventTranslator {
             top_causal_features,
             timestamp_ms: now_ms,
         })
+    }
+
+    fn evaluate_event_with_mode(
+        &mut self,
+        outputs: &[f32],
+        features: &[f32],
+        now_ms: u64,
+        apply_zscore_stats: bool,
+    ) -> Option<SystemEventPayload> {
+        if outputs.is_empty()
+            || !outputs.iter().all(|v| v.is_finite())
+            || self.event_code.trim().is_empty()
+            || validate_target_subsystem(&self.target_subsystem).is_err()
+        {
+            return None;
+        }
+
+        let (means, stds) = if apply_zscore_stats {
+            (self.zscore_mean.as_slice(), self.zscore_std.as_slice())
+        } else {
+            (&[][..], &[][..])
+        };
+        let top_causal_features = Self::rank_top_causal_features(
+            features,
+            &self.feature_names,
+            means,
+            stds,
+            self.top_k_features,
+        )?;
+
+        self.emit_event_from_ranked(outputs, top_causal_features, now_ms)
+    }
+
+    /// Evaluates model output scores and input features at `now_ms`, emitting a
+    /// [`SystemEventPayload`] with top-K causal feature attribution when hysteresis triggers.
+    ///
+    /// Applies any bound `zscore_mean`/`zscore_std` statistics when ranking `features`.
+    /// Fails closed (returns `None` without mutating translator state) if inputs contain
+    /// non-finite values, `outputs` is empty, or bound normalization stats mismatch `features`.
+    pub fn evaluate_event(
+        &mut self,
+        outputs: &[f32],
+        features: &[f32],
+        now_ms: u64,
+    ) -> Option<SystemEventPayload> {
+        self.evaluate_event_with_mode(outputs, features, now_ms, true)
+    }
+
+    /// Variant of [`Self::evaluate_event`] for callers supplying already-normalized feature
+    /// vectors (`z`-scores): preserves bound `feature_names` for attribution while skipping
+    /// re-application of `zscore_mean`/`zscore_std`.
+    pub fn evaluate_event_pre_normalized(
+        &mut self,
+        outputs: &[f32],
+        features: &[f32],
+        now_ms: u64,
+    ) -> Option<SystemEventPayload> {
+        self.evaluate_event_with_mode(outputs, features, now_ms, false)
     }
 
     /// Explicit error-returning variant of [`Self::evaluate_event`] using caller-supplied
@@ -769,18 +812,7 @@ impl HysteresisEventTranslator {
             })
         })?;
 
-        let confidence = outputs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        if !self.evaluate_score(confidence, now_ms) {
-            return Ok(None);
-        }
-
-        Ok(Some(SystemEventPayload {
-            event_code: self.event_code.clone(),
-            target_subsystem: self.target_subsystem.clone(),
-            confidence,
-            top_causal_features,
-            timestamp_ms: now_ms,
-        }))
+        Ok(self.emit_event_from_ranked(outputs, top_causal_features, now_ms))
     }
 }
 
@@ -921,5 +953,31 @@ mod tests {
             .expect("sustained 2-of-3 ticks emits event");
         assert_eq!(emitted.target_subsystem, "ActionRunner");
         emitted.validate().expect("payload valid");
+    }
+
+    #[test]
+    fn test_hysteresis_pre_normalized_preserves_feature_names_without_double_zscore() {
+        let mut tr =
+            HysteresisEventTranslator::new(0.80, 0.35, 1_000, "STAGE_RESCHEDULE", "ActionRunner")
+                .expect("valid translator")
+                .with_top_k(3)
+                .with_feature_stats(
+                    vec![
+                        "cpu_util".to_owned(),
+                        "queue_depth".to_owned(),
+                        "mem_pressure".to_owned(),
+                    ],
+                    vec![0.40, 4.0, 0.50],
+                    vec![0.10, 2.0, 0.25],
+                )
+                .expect("feature stats");
+
+        let ev = tr
+            .evaluate_event_pre_normalized(&[0.90], &[0.0, 4.0, 0.0], 2_000)
+            .expect("emits event with pre-normalized z-scores");
+        assert_eq!(ev.top_causal_features[0].0, "queue_depth");
+        assert!((ev.top_causal_features[0].1 - 4.0).abs() < 1e-6);
+        assert!(ev.top_causal_features[1].1.abs() < 1e-6);
+        assert!(ev.top_causal_features[2].1.abs() < 1e-6);
     }
 }

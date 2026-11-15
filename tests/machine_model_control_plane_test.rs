@@ -797,3 +797,49 @@ async fn test_chained_pipeline_ttm_to_ft_transformer_to_llm() {
         .await;
     assert_eq!(stage3_http.status, 200);
 }
+
+#[tokio::test]
+async fn test_already_normalized_causal_attribution_avoids_double_zscore_normalization() {
+    let runtime = build_machine_test_runtime();
+    register_test_model(&runtime, "ttm-pre-norm", "x100");
+    // mean = [0.40, 4.0, 0.50], std = [0.10, 2.0, 0.25]
+    runtime
+        .register_machine_schema(
+            "ttm-pre-norm",
+            sample_schema("ActionRunner", "STAGE_RESCHEDULE", 0.80, 0.35, 5_000),
+        )
+        .expect("register schema");
+    runtime.set_machine_infer_evaluator(Arc::new(|_req, norm| {
+        assert!((norm[1] - 4.0).abs() < 1e-6);
+        Ok(vec![0.91])
+    }));
+
+    // With already_normalized: true, [0.0, 4.0, 0.0] represents pre-computed z-scores.
+    // Re-applying zscore_mean/std would invert ranking to cpu_util=4.0, mem_pressure=2.0, queue_depth=0.0.
+    let resp = runtime
+        .evaluate_machine_infer(&MachineInferRequest {
+            model: "ttm-pre-norm".to_owned(),
+            features: vec![0.0, 4.0, 0.0],
+            rows: None,
+            num_rows: Some(1),
+            num_cols: Some(3),
+            clip_sigma: None,
+            timestamp_ms: Some(10_000),
+            already_normalized: true,
+        })
+        .expect("pre-normalized inference succeeds");
+
+    let evt = resp.emitted_event.expect("system event emitted");
+    assert_eq!(evt.top_causal_features.len(), 3);
+    assert_eq!(evt.top_causal_features[0].0, "queue_depth");
+    assert!(
+        (evt.top_causal_features[0].1 - 4.0).abs() < 1e-6,
+        "expected queue_depth magnitude 4.0 without double normalization, got {}",
+        evt.top_causal_features[0].1
+    );
+    assert!(
+        evt.top_causal_features[1].1.abs() < 1e-6 && evt.top_causal_features[2].1.abs() < 1e-6,
+        "non-elevated pre-normalized features must remain 0.0: {:?}",
+        evt.top_causal_features
+    );
+}

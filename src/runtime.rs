@@ -1037,39 +1037,15 @@ impl ControlPlaneRuntime {
             ));
         }
 
-        let now_ms = req.timestamp_ms.unwrap_or(0);
-        let mut emitted_event: Option<SystemEventPayload> = None;
-        if let Some(translator) = self
-            .machine
-            .translators
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_mut(&req.model)
-        {
-            let attr_input = if translator.has_zscore_stats() && !req.already_normalized {
-                &raw_features
-            } else {
-                &normalized_features
-            };
-            if rows_usize > 1 && outputs.len() == rows_usize {
-                for (row_idx, &score) in outputs.iter().enumerate() {
-                    let start = row_idx * cols_usize;
-                    let end = start + cols_usize;
-                    if let Some(ev) =
-                        translator.evaluate_event(&[score], &attr_input[start..end], now_ms)
-                    {
-                        emitted_event = Some(ev);
-                    }
-                }
-            } else {
-                let last_start = (rows_usize - 1) * cols_usize;
-                emitted_event = translator.evaluate_event(
-                    &outputs,
-                    &attr_input[last_start..last_start + cols_usize],
-                    now_ms,
-                );
-            }
-        }
+        let emitted_event = self.evaluate_machine_events(
+            req,
+            schema_opt.as_ref(),
+            &raw_features,
+            &normalized_features,
+            rows_usize,
+            cols_usize,
+            &outputs,
+        );
 
         Ok(MachineInferResponse {
             model: req.model.clone(),
@@ -1078,6 +1054,64 @@ impl ControlPlaneRuntime {
             outputs,
             emitted_event,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_machine_events(
+        &self,
+        req: &MachineInferRequest,
+        schema_opt: Option<&MachineFeatureSchema>,
+        raw_features: &[f32],
+        normalized_features: &[f32],
+        rows_usize: usize,
+        cols_usize: usize,
+        outputs: &[f32],
+    ) -> Option<SystemEventPayload> {
+        let now_ms = req.timestamp_ms.unwrap_or(0);
+        let mut translators = self
+            .machine
+            .translators
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let translator = translators.get_mut(&req.model)?;
+
+        let apply_stats = translator.has_zscore_stats() && !req.already_normalized;
+        let attr_input = if apply_stats {
+            raw_features
+        } else {
+            normalized_features
+        };
+        let schema_feature_names: Option<&[String]> = schema_opt
+            .filter(|_| translator.feature_names().is_empty())
+            .map(|s| s.feature_names.as_slice());
+
+        let mut eval_row = |scores: &[f32], feat_row: &[f32]| -> Option<SystemEventPayload> {
+            if apply_stats {
+                translator.evaluate_event(scores, feat_row, now_ms)
+            } else if let Some(names) = schema_feature_names {
+                translator
+                    .evaluate_event_with_stats(scores, feat_row, names, &[], &[], now_ms)
+                    .ok()
+                    .flatten()
+            } else {
+                translator.evaluate_event_pre_normalized(scores, feat_row, now_ms)
+            }
+        };
+
+        if rows_usize > 1 && outputs.len() == rows_usize {
+            let mut emitted_event = None;
+            for (row_idx, &score) in outputs.iter().enumerate() {
+                let start = row_idx * cols_usize;
+                let end = start + cols_usize;
+                if let Some(ev) = eval_row(&[score], &attr_input[start..end]) {
+                    emitted_event = Some(ev);
+                }
+            }
+            emitted_event
+        } else {
+            let last_start = (rows_usize - 1) * cols_usize;
+            eval_row(outputs, &attr_input[last_start..last_start + cols_usize])
+        }
     }
 
     /// Evaluates a prompt and/or serialized tool-call payload against the specified guardrail worker,
