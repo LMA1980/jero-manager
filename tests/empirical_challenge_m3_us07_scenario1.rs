@@ -53,8 +53,8 @@ fn create_dummy_weights(name: &str) -> PathBuf {
     let seq = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("{name}_{pid}_{seq}.gguf"));
     let mut f = File::create(&path).expect("create dummy weights file");
-    f.write_all(b"GGUF_TEST_SYNTHETIC_CHALLENGE_US07_SCENARIO1")
-        .expect("write dummy weights");
+    let gguf = jero_core::test_helpers::create_synthetic_gguf_v3("synthetic", 32, &[]);
+    f.write_all(&gguf).expect("write dummy weights");
     path
 }
 

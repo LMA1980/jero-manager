@@ -39,8 +39,8 @@ fn create_dummy_weights(name: &str) -> std::path::PathBuf {
     let seq = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("{name}_{pid}_{seq}.gguf"));
     let mut f = File::create(&path).expect("create dummy weights file");
-    f.write_all(b"GGUF_TEST_SYNTHETIC_MODEL_WEIGHTS_V1")
-        .expect("write dummy weights");
+    let gguf = jero_core::test_helpers::create_synthetic_gguf_v3("synthetic", 32, &[]);
+    f.write_all(&gguf).expect("write dummy weights");
     path
 }
 
@@ -167,16 +167,25 @@ fn test_scenario1_zerocopy_forward_pass_orchestration() {
     assert!(!arrow_logits.is_empty());
     let vocab_size = arrow_logits.len();
 
-    // Verify bit-exactness of synthetic output logits:
-    // logit[t] = token_vals[i % token_vals.len()] * 0.01 + (i as f32) * 0.1
+    // Verify deterministic SyntheticRecipe prefill logits in OutputSlab:
+    // peak at target_slot (slot 9 when vocab_size > 9) in [1.0, 1.0025) and exact 0.0 elsewhere.
+    let target_slot = if vocab_size > 9 { 9 } else { 0 };
     let logits_slice = arrow_logits.values().as_ref();
     for (i, &l) in logits_slice.iter().enumerate() {
-        let expected = (prompt_tokens[i % prompt_tokens.len()] as f32) * 0.01 + (i as f32) * 0.1;
-        assert!(
-            (l - expected).abs() < 1e-6,
-            "logits mismatch at index {i}: observed {l}, expected {expected}"
-        );
+        assert!(l.is_finite(), "logit at index {i} must be finite, got {l}");
+        if i == target_slot {
+            assert!(
+                (1.0..1.0025).contains(&l),
+                "expected SyntheticRecipe prefill peak at slot {target_slot} in [1.0, 1.0025), got {l}"
+            );
+        } else {
+            assert_eq!(
+                l, 0.0,
+                "expected exact 0.0 logit outside target slot {target_slot} at index {i}, got {l}"
+            );
+        }
     }
+    assert_eq!(prefill_result.next_token(), target_slot as u32);
 
     // Verify KV cache block metadata committed in place
     let block0 = worker.get_block_meta(0).expect("read block 0");
@@ -206,8 +215,28 @@ fn test_scenario1_zerocopy_forward_pass_orchestration() {
     assert_eq!(decode_result.prefill_latency_ms(), 0.0);
     assert!(decode_result.decode_latency_ms() > 0.0);
 
-    // Verify decode logits output view
-    assert_eq!(decode_result.logits().len(), vocab_size);
+    // Verify decode logits output view matches deterministic SyntheticRecipe::decode_step
+    let decode_logits = decode_result.logits();
+    assert_eq!(decode_logits.len(), vocab_size);
+    let decode_slot = (sampled_next_token as usize + 1) % vocab_size;
+    for (i, &l) in decode_logits.values().iter().enumerate() {
+        assert!(
+            l.is_finite(),
+            "decode logit at index {i} must be finite, got {l}"
+        );
+        if i == decode_slot {
+            assert!(
+                (2.0..2.0025).contains(&l),
+                "expected SyntheticRecipe decode peak at slot {decode_slot} in [2.0, 2.0025), got {l}"
+            );
+        } else {
+            assert_eq!(
+                l, 0.0,
+                "expected exact 0.0 decode logit outside slot {decode_slot} at index {i}, got {l}"
+            );
+        }
+    }
+    assert_eq!(decode_result.next_token(), decode_slot as u32);
 
     // ------------------------------------------------------------------------
     // Step 8: Clean shutdown across all domains

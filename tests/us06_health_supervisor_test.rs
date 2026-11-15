@@ -60,7 +60,8 @@ fn create_dummy_weights(name: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     let path = std::env::temp_dir().join(format!("{name}_{pid}_{seq}.gguf"));
-    let _ = std::fs::write(&path, b"GGUF_TEST_SYNTHETIC_MODEL_WEIGHTS_UNIT");
+    let gguf = jero_core::test_helpers::create_synthetic_gguf_v3("synthetic", 32, &[]);
+    let _ = std::fs::write(&path, gguf);
     path
 }
 
