@@ -7,12 +7,32 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use jero_core::ipc::protocol::{
     AllocateArenaRequest, AllocateArenaResponse, DeallocateArenaRequest, DeallocateArenaResponse,
-    GetArenaFdRequest, GetArenaFdResponse, IpcMessage, PingRequest, PingResponse, recv_msg_frame,
-    send_msg_frame,
+    GetArenaFdRequest, GetArenaFdResponse, IpcMessage, KV_DTYPE_F32, PingRequest, PingResponse,
+    recv_msg_frame, send_msg_frame,
 };
 use jero_core::ipc::shm::SharedMemoryArena;
 
 use crate::error::ManagerError;
+
+/// Builds a 9-field [`AllocateArenaRequest`] populated with baseline F32 model geometry defaults.
+fn default_allocate_arena_request(
+    model_id: &str,
+    arena_bytes: u64,
+    n_ctx: u32,
+    max_blocks: u32,
+) -> AllocateArenaRequest {
+    AllocateArenaRequest {
+        model_id: model_id.to_owned(),
+        arena_bytes,
+        n_ctx,
+        max_blocks,
+        num_layers: 2,
+        head_count_kv: 2,
+        head_dim: 64,
+        vocab_size: 32_000,
+        kv_dtype: KV_DTYPE_F32,
+    }
+}
 
 /// Client connection to the `k3-kv` memory holder daemon over Unix Domain Sockets.
 #[derive(Debug)]
@@ -95,25 +115,24 @@ impl KvClient {
         self.ping()
     }
 
-    /// Requests allocation of a shared-memory arena for a model (`AllocateArenaRequest` / Type ID 101).
+    /// Requests allocation of a shared-memory arena for a model using explicit request geometry
+    /// (`AllocateArenaRequest` / Type ID 101).
+    ///
+    /// Validates `req` upfront before serializing or sending over the Unix domain socket.
     ///
     /// # Errors
-    /// Returns [`ManagerError`] on communication failure or non-success status.
-    pub fn allocate_arena(
+    /// Returns [`ManagerError::Kv`] if [`AllocateArenaRequest::validate`] fails or socket I/O
+    /// fails, [`ManagerError::Status`] if `k3-kv` returns a non-success status, or
+    /// [`ManagerError::Protocol`] on an unexpected response message type.
+    pub fn allocate_arena_with_request(
         &mut self,
-        model_id: &str,
-        arena_bytes: u64,
-        n_ctx: u32,
-        max_blocks: u32,
+        req: AllocateArenaRequest,
     ) -> Result<AllocateArenaResponse, ManagerError> {
-        let req = IpcMessage::AllocateArenaRequest(AllocateArenaRequest {
-            model_id: model_id.to_owned(),
-            arena_bytes,
-            n_ctx,
-            max_blocks,
-        });
+        req.validate()
+            .map_err(|msg| ManagerError::Kv(msg.to_owned()))?;
+        let msg = IpcMessage::AllocateArenaRequest(req);
 
-        send_msg_frame(&self.stream, &req, None).map_err(|e| {
+        send_msg_frame(&self.stream, &msg, None).map_err(|e| {
             ManagerError::Kv(format!("failed to send AllocateArenaRequest to k3-kv: {e}"))
         })?;
 
@@ -140,6 +159,23 @@ impl KvClient {
                 "expected AllocateArenaResponse from k3-kv, got {other:?}"
             ))),
         }
+    }
+
+    /// Requests allocation of a shared-memory arena for a model (`AllocateArenaRequest` / Type ID 101)
+    /// using baseline default geometry (`num_layers = 2`, `head_count_kv = 2`, `head_dim = 64`,
+    /// `vocab_size = 32_000`, `kv_dtype = KV_DTYPE_F32`).
+    ///
+    /// # Errors
+    /// Returns [`ManagerError`] on validation failure, communication failure, or non-success status.
+    pub fn allocate_arena(
+        &mut self,
+        model_id: &str,
+        arena_bytes: u64,
+        n_ctx: u32,
+        max_blocks: u32,
+    ) -> Result<AllocateArenaResponse, ManagerError> {
+        let req = default_allocate_arena_request(model_id, arena_bytes, n_ctx, max_blocks);
+        self.allocate_arena_with_request(req)
     }
 
     /// Requests the file descriptor for an arena passed via `SCM_RIGHTS` (`GetArenaFdRequest` / Type ID 103).
@@ -201,7 +237,39 @@ impl KvClient {
         Ok(arena)
     }
 
-    /// Allocates an arena and attaches/maps it into local virtual memory in a single convenience call.
+    /// Allocates an arena from an explicit [`AllocateArenaRequest`] and attaches/maps it into local
+    /// virtual memory in a single convenience call.
+    ///
+    /// Validates `req` upfront before issuing any IPC call and deallocates the created arena if
+    /// attachment fails.
+    ///
+    /// # Errors
+    /// Returns [`ManagerError`] on validation failure, allocation failure, `arena_bytes` overflow,
+    /// or shared-memory attachment failure.
+    pub fn allocate_and_attach_with_request(
+        &mut self,
+        req: AllocateArenaRequest,
+    ) -> Result<(AllocateArenaResponse, SharedMemoryArena), ManagerError> {
+        req.validate()
+            .map_err(|msg| ManagerError::Kv(msg.to_owned()))?;
+        let model_id = req.model_id.clone();
+        let alloc_resp = self.allocate_arena_with_request(req)?;
+        let bytes_len = usize::try_from(alloc_resp.arena_bytes).map_err(|_| {
+            let _ = self.deallocate_arena(alloc_resp.arena_id);
+            ManagerError::Kv("allocated arena_bytes exceeds usize".to_owned())
+        })?;
+        let arena = match self.attach_arena(alloc_resp.arena_id, bytes_len, &model_id) {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = self.deallocate_arena(alloc_resp.arena_id);
+                return Err(e);
+            }
+        };
+        Ok((alloc_resp, arena))
+    }
+
+    /// Allocates an arena using baseline default geometry and attaches/maps it into local virtual
+    /// memory in a single convenience call.
     ///
     /// # Errors
     /// Returns [`ManagerError`] on failure.
@@ -212,19 +280,8 @@ impl KvClient {
         n_ctx: u32,
         max_blocks: u32,
     ) -> Result<(AllocateArenaResponse, SharedMemoryArena), ManagerError> {
-        let alloc_resp = self.allocate_arena(model_id, arena_bytes, n_ctx, max_blocks)?;
-        let bytes_len = usize::try_from(alloc_resp.arena_bytes).map_err(|_| {
-            let _ = self.deallocate_arena(alloc_resp.arena_id);
-            ManagerError::Kv("allocated arena_bytes exceeds usize".to_owned())
-        })?;
-        let arena = match self.attach_arena(alloc_resp.arena_id, bytes_len, model_id) {
-            Ok(a) => a,
-            Err(e) => {
-                let _ = self.deallocate_arena(alloc_resp.arena_id);
-                return Err(e);
-            }
-        };
-        Ok((alloc_resp, arena))
+        let req = default_allocate_arena_request(model_id, arena_bytes, n_ctx, max_blocks);
+        self.allocate_and_attach_with_request(req)
     }
 
     /// Requests deallocation of an arena in `k3-kv` (`DeallocateArenaRequest` / Type ID 105).
