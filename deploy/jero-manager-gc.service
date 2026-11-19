@@ -1,0 +1,34 @@
+[Unit]
+Description=Jero Manager Content-Addressed Store Garbage Collector
+Documentation=https://github.com/LMA1980/jero-manager
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Slice=jero-runner.slice
+User=jero-runner
+Group=jero-runner
+WorkingDirectory=/var/lib/jero-runner
+Environment=JERO_STORE_ROOT=/var/lib/jero-runner
+ExecStart=/usr/local/bin/jero-manager-gc gc
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/jero-runner
+ReadOnlyPaths=/proc
+InaccessiblePaths=/etc/shadow /root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Content-Addressed Store Garbage Collection for jero-manager
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15m
+Persistent=true
+Unit=jero-manager-gc.service
+
+[Install]
+WantedBy=timers.target

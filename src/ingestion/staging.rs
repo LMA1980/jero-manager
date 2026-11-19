@@ -661,7 +661,9 @@ impl StagingPipeline {
                 parent.join("blobs").join("sha256")
             }
         } else {
-            PathBuf::from("/var/lib/k3/blobs/sha256")
+            crate::store::resolve_default_store_root()
+                .join("blobs")
+                .join("sha256")
         };
 
         Self::promote_to_cas(part_path, &actual_digest, &blobs_dir, None).map_err(K3Error::from)

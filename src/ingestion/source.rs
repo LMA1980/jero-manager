@@ -1,7 +1,7 @@
 //! Secret Resolution and Credential Isolation (Feature 30, ADR-041, AGENTS.md §3).
 //!
 //! Enforces fail-closed resolution for secrets specified either as literal tokens
-//! or file paths (e.g., mode 0600 `/etc/k3/credentials/<source>.env`).
+//! or file paths (e.g., mode 0600 `/etc/jero-runner/credentials/<source>.env`).
 //! Sensitive credential memory is zeroized via `.wipe()` using authentic volatile
 //! memory writes (`std::ptr::write_volatile`) upon completion.
 

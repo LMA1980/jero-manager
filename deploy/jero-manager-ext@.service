@@ -1,0 +1,38 @@
+[Unit]
+Description=Jero Manager Edge Extension (%i)
+Documentation=https://github.com/LMA1980/jero-manager
+Requires=jero-manager.service
+After=network-online.target jero-manager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Slice=jero-runner.slice
+User=jero-runner
+Group=jero-runner
+RuntimeDirectory=jero-runner
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+EnvironmentFile=-/etc/jero-runner/ext-%i.env
+ExecStart=/usr/local/bin/jero-manager-ext-%i --socket /run/jero-runner/ext-%i.sock
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/jero-runner
+InaccessiblePaths=/var/lib/jero-runner /etc/shadow /root
+
+[Install]
+WantedBy=multi-user.target

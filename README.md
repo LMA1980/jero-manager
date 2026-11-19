@@ -21,7 +21,7 @@ Control plane for the SpacemiT K3 AI platform.
 
 `jero-manager` provides the orchestration layer, session management, content-addressed model store, and external APIs for the SpacemiT K3 platform:
 
-- **Binaries**: `jero-manager` (control-plane daemon) and `k3-store` (content-addressed model catalog & garbage-collection CLI).
+- **Binaries**: `jero-manager` (control-plane daemon) and `jero-manager-gc` (content-addressed model catalog & garbage-collection CLI; Phase 1 alias `k3-store`).
 - **IPC Daemon**: Apache Fory and Apache Arrow IPC serialization over Unix Domain Sockets (UDS) + `memfd` shared memory.
 - **Persistence**: Active in-memory sessions and CAS blob/manifest catalogs backed by DuckDB (`DuckDbPersistenceStore`) for reboot persistence.
 - **Modular WebAPI & Console Endpoints**: OpenAI- and Anthropic-compatible protocol endpoints alongside [`mu-auth`](https://github.com/LMA1980/mu-auth)-gated `/api/mr/v1/status` and `/api/mr/v1/connection` endpoints consumed by [`mu-console`](https://github.com/LMA1980/mu-console).

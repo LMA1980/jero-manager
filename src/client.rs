@@ -1,4 +1,4 @@
-//! Unix Domain Socket client for `k3-kv` context memory holder daemon.
+//! Unix Domain Socket client for `jero-kv-cache` context memory holder daemon.
 
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
@@ -13,6 +13,46 @@ use jero_core::ipc::protocol::{
 use jero_core::ipc::shm::SharedMemoryArena;
 
 use crate::error::ManagerError;
+
+/// Canonical Unix domain socket path for `jero-kv-cache`.
+pub const DEFAULT_KV_SOCKET_PATH: &str = "/run/jero-runner/kv.sock";
+
+/// Legacy Phase 1 Unix domain socket path fallback when `/run/jero-runner/kv.sock` does not exist yet.
+pub const LEGACY_KV_SOCKET_PATH: &str = "/tmp/jero-kv-cache.sock";
+
+/// Environment variable overriding the `jero-kv-cache` Unix domain socket path.
+pub const ENV_KV_SOCKET: &str = "JERO_KV_SOCKET";
+
+fn resolve_kv_socket_path_with(
+    get_env: impl Fn(&str) -> Option<String>,
+    exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    if let Some(val) = get_env(ENV_KV_SOCKET) {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    let canonical = Path::new(DEFAULT_KV_SOCKET_PATH);
+    if exists(canonical) {
+        return canonical.to_path_buf();
+    }
+    let legacy = Path::new(LEGACY_KV_SOCKET_PATH);
+    if exists(legacy) {
+        return legacy.to_path_buf();
+    }
+    canonical.to_path_buf()
+}
+
+/// Resolves the `jero-kv-cache` Unix domain socket path.
+///
+/// Precedence: `JERO_KV_SOCKET` -> `/run/jero-runner/kv.sock`
+/// (falling back to existing `/tmp/jero-kv-cache.sock` if `/run/jero-runner/kv.sock`
+/// does not exist yet).
+#[must_use]
+pub fn resolve_kv_socket_path() -> PathBuf {
+    resolve_kv_socket_path_with(|k| std::env::var(k).ok(), Path::exists)
+}
 
 /// Builds a 9-field [`AllocateArenaRequest`] populated with baseline F32 model geometry defaults.
 fn default_allocate_arena_request(
@@ -34,7 +74,7 @@ fn default_allocate_arena_request(
     }
 }
 
-/// Client connection to the `k3-kv` memory holder daemon over Unix Domain Sockets.
+/// Client connection to the `jero-kv-cache` memory holder daemon over Unix Domain Sockets.
 #[derive(Debug)]
 pub struct KvClient {
     stream: UnixStream,
@@ -42,7 +82,7 @@ pub struct KvClient {
 }
 
 impl KvClient {
-    /// Connects to a running `k3-kv` daemon at `socket_path`.
+    /// Connects to a running `jero-kv-cache` daemon at `socket_path`.
     ///
     /// # Errors
     /// Returns [`ManagerError::Kv`] if connecting to the socket fails.
@@ -50,7 +90,7 @@ impl KvClient {
         let path = socket_path.as_ref();
         let stream = UnixStream::connect(path).map_err(|e| {
             ManagerError::Kv(format!(
-                "failed to connect to k3-kv socket '{}': {e}",
+                "failed to connect to jero-kv-cache socket '{}': {e}",
                 path.display()
             ))
         })?;
@@ -58,6 +98,14 @@ impl KvClient {
             stream,
             socket_path: Some(path.to_path_buf()),
         })
+    }
+
+    /// Connects to the default `jero-kv-cache` daemon resolved via [`resolve_kv_socket_path`].
+    ///
+    /// # Errors
+    /// Returns [`ManagerError::Kv`] if connecting to the socket fails.
+    pub fn connect_default() -> Result<Self, ManagerError> {
+        Self::connect(resolve_kv_socket_path())
     }
 
     /// Wraps an existing connected [`UnixStream`].
@@ -323,5 +371,40 @@ impl KvClient {
                 "expected DeallocateArenaResponse from k3-kv, got {other:?}"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_kv_socket_path_precedence_and_legacy_fallback() {
+        // 1. Explicit JERO_KV_SOCKET overrides filesystem paths
+        assert_eq!(
+            resolve_kv_socket_path_with(
+                |k| (k == ENV_KV_SOCKET).then(|| "/tmp/override-kv.sock".to_owned()),
+                |_| true
+            ),
+            PathBuf::from("/tmp/override-kv.sock")
+        );
+
+        // 2. Canonical /run/jero-runner/kv.sock preferred when both exist
+        assert_eq!(
+            resolve_kv_socket_path_with(|_| None, |_| true),
+            PathBuf::from(DEFAULT_KV_SOCKET_PATH)
+        );
+
+        // 3. Falls back to /tmp/jero-kv-cache.sock when only legacy path exists
+        assert_eq!(
+            resolve_kv_socket_path_with(|_| None, |p| p == Path::new(LEGACY_KV_SOCKET_PATH)),
+            PathBuf::from(LEGACY_KV_SOCKET_PATH)
+        );
+
+        // 4. Defaults to /run/jero-runner/kv.sock when neither exists
+        assert_eq!(
+            resolve_kv_socket_path_with(|_| None, |_| false),
+            PathBuf::from(DEFAULT_KV_SOCKET_PATH)
+        );
     }
 }

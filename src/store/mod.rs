@@ -7,9 +7,11 @@ pub mod gc;
 pub mod sha256;
 
 pub use cas::{
-    ContentAddressedStore, DEFAULT_STORE_ROOT, ENV_STORE_ROOT, MAX_PATH_COMPONENT_LEN,
-    MachineEventRule, MachineFeatureSchema, MachineModelManifest, ModelManifest, ResolvedAlias,
-    parse_alias_id, validate_path_component, validate_sha256_digest,
+    ContentAddressedStore, DEFAULT_STORE_ROOT, ENV_CATALOG_PATH, ENV_STORE_ROOT,
+    LEGACY_DEFAULT_STORE_ROOT, LEGACY_ENV_CATALOG_PATH, LEGACY_ENV_STORE_ROOT,
+    MAX_PATH_COMPONENT_LEN, MachineEventRule, MachineFeatureSchema, MachineModelManifest,
+    ModelManifest, ResolvedAlias, parse_alias_id, resolve_catalog_path, resolve_default_store_root,
+    validate_path_component, validate_sha256_digest,
 };
 pub use derived::{
     DerivedBlobManager, DerivedResolution, RetentionPolicy, StaleRecipeOutcome,

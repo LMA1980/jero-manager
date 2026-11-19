@@ -1,7 +1,7 @@
-//! `k3-store`: Administrative CLI utility for Model-Runner content-addressed store & safe GC (US-22, ADR-040).
+//! `jero-manager-gc`: Administrative CLI utility for Jero Runner content-addressed store & safe GC (US-22, ADR-040).
 //!
 //! Provides operational commands for storage inspection, active lock/mapping queries (`who-uses`),
-//! and safe dual-gate garbage collection (`gc`).
+//! and safe dual-gate garbage collection (`gc`). Phase 1 compatibility alias: `k3-store`.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -10,19 +10,20 @@ use std::sync::Arc;
 
 use jero_manager::persistence::{CasCatalog, DuckDbPersistenceStore};
 use jero_manager::store::{
-    ContentAddressedStore, DEFAULT_STORE_ROOT, ENV_STORE_ROOT, StorageGarbageCollector,
+    ContentAddressedStore, StorageGarbageCollector, resolve_catalog_path,
+    resolve_default_store_root,
 };
 
 fn print_usage() {
     eprintln!(
-        "Usage: k3-store [OPTIONS] <COMMAND>\n\n\
+        "Usage: jero-manager-gc [OPTIONS] <COMMAND>\n\n\
          Commands:\n  \
            who-uses <digest>            Inspect active locks and memory mappings for a blob\n  \
            gc [--dry-run]               Safely reclaim unreferenced weight blobs via dual-gate check\n  \
            list [blobs|manifests|aliases] List registered store assets\n  \
            inspect <alias_or_digest>    Inspect manifest metadata and resolved weight path\n\n\
          Options:\n  \
-           --store-root <path>          Path to store root directory (default: /var/lib/k3 or $K3_STORE_ROOT)\n  \
+           --store-root <path>          Path to store root directory (default: /var/lib/jero-runner or $JERO_STORE_ROOT)\n  \
            --json                       Format output as JSON\n  \
            -h, --help                   Display this help message"
     );
@@ -31,7 +32,7 @@ fn print_usage() {
 fn open_store(
     store_root: &Path,
 ) -> Result<(ContentAddressedStore, StorageGarbageCollector), String> {
-    let catalog_path = store_root.join("catalog.duckdb");
+    let catalog_path = resolve_catalog_path(store_root);
     let catalog = DuckDbPersistenceStore::open(&catalog_path).map_err(|e| {
         format!(
             "failed to open DuckDB catalog at '{}': {e}",
@@ -59,8 +60,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let mut store_root_str =
-        env::var(ENV_STORE_ROOT).unwrap_or_else(|_| DEFAULT_STORE_ROOT.to_owned());
+    let mut store_root = resolve_default_store_root();
     let mut as_json = false;
     let mut dry_run = false;
     let mut cmd = None;
@@ -82,7 +82,7 @@ fn main() -> ExitCode {
             "--store-root" => {
                 if i + 1 < args.len() {
                     i += 1;
-                    store_root_str.clone_from(&args[i]);
+                    store_root = PathBuf::from(&args[i]);
                 } else {
                     eprintln!("Error: --store-root requires a path argument");
                     return ExitCode::from(1);
@@ -107,7 +107,6 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     };
 
-    let store_root = PathBuf::from(&store_root_str);
     let (store, gc) = match open_store(&store_root) {
         Ok(res) => res,
         Err(err) => {
