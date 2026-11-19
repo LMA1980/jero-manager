@@ -13,8 +13,12 @@ name = "jero-manager"
 path = "src/main.rs"
 
 [[bin]]
+name = "jero-manager-gc"
+path = "src/bin/jero-manager-gc.rs"
+
+[[bin]]
 name = "k3-store"
-path = "src/bin/k3-store.rs"
+path = "src/bin/jero-manager-gc.rs"
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

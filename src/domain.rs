@@ -721,9 +721,27 @@ impl OsAffinityBackend for MockOsAffinityBackend {
 // Isolation Domain Controller Trait
 // ============================================================================
 
+/// Canonical systemd slice cgroup v2 path for Jero Runner domains.
+pub const CANONICAL_SLICE_CGROUP_PATH: &str = "/sys/fs/cgroup/jero-runner.slice";
+
+/// Legacy Phase 1 systemd slice cgroup v2 path fallback.
+pub const LEGACY_SLICE_CGROUP_PATH: &str = "/sys/fs/cgroup/k3.slice";
+
+fn resolve_default_slice_path_with(exists: impl Fn(&Path) -> bool) -> PathBuf {
+    let canonical = Path::new(CANONICAL_SLICE_CGROUP_PATH);
+    if exists(canonical) {
+        return canonical.to_path_buf();
+    }
+    let legacy = Path::new(LEGACY_SLICE_CGROUP_PATH);
+    if exists(legacy) {
+        return legacy.to_path_buf();
+    }
+    canonical.to_path_buf()
+}
+
 /// Core controller trait managing cgroup v2 domain placement and OS affinity fallback.
 pub trait IsolationDomainController: Send + Sync + fmt::Debug {
-    /// Places `k3-manager` into the `.../control` leaf domain with reserved control-plane cores.
+    /// Places `jero-manager` into the `.../control` leaf domain with reserved control-plane cores.
     ///
     /// If `target_pid == 0`, targets current process (`std::process::id()`).
     ///
@@ -735,7 +753,7 @@ pub trait IsolationDomainController: Send + Sync + fmt::Debug {
         capacity: &ResolvedControlCapacity,
     ) -> Result<PlacementOutcome, ManagerError>;
 
-    /// Places a spawned `k3-worker` process into delegated `.../engines/<model>` leaf domain.
+    /// Places a spawned `jero-engine` process into delegated `.../engines/<model>` leaf domain.
     ///
     /// # Errors
     /// Returns [`ManagerError`] if mask is invalid or if both cgroup and fallback fail.
@@ -761,11 +779,13 @@ pub struct CgroupV2DomainController {
 }
 
 impl CgroupV2DomainController {
-    /// Constructs a domain controller rooted at standard systemd slice (`/sys/fs/cgroup/k3.slice`).
+    /// Constructs a domain controller rooted at the canonical systemd slice
+    /// (`/sys/fs/cgroup/jero-runner.slice`), falling back to `/sys/fs/cgroup/k3.slice`
+    /// when only the legacy slice exists.
     #[must_use]
     pub fn default_slice() -> Self {
         Self {
-            base_path: PathBuf::from("/sys/fs/cgroup/k3.slice"),
+            base_path: resolve_default_slice_path_with(Path::exists),
             fs: Arc::new(RealCgroupFs),
             affinity_backend: Arc::new(RealOsAffinityBackend),
             include_spare_in_control: true,
@@ -1199,5 +1219,43 @@ mod tests {
         let mut bad_mode = default_profile;
         bad_mode.recurrent_kv_cache_mode = Some("invalid_mode".to_string());
         assert!(validate_tuning_profile_dory_overrides(&bad_mode).is_err());
+    }
+
+    #[test]
+    fn test_default_slice_prefers_jero_runner_and_falls_back_to_k3() {
+        // 1. Both exist -> canonical jero-runner.slice
+        assert_eq!(
+            resolve_default_slice_path_with(|_| true),
+            PathBuf::from(CANONICAL_SLICE_CGROUP_PATH)
+        );
+
+        // 2. Only canonical exists -> canonical jero-runner.slice
+        assert_eq!(
+            resolve_default_slice_path_with(|p| p == Path::new(CANONICAL_SLICE_CGROUP_PATH)),
+            PathBuf::from(CANONICAL_SLICE_CGROUP_PATH)
+        );
+
+        // 3. Only legacy k3.slice exists -> legacy k3.slice fallback
+        assert_eq!(
+            resolve_default_slice_path_with(|p| p == Path::new(LEGACY_SLICE_CGROUP_PATH)),
+            PathBuf::from(LEGACY_SLICE_CGROUP_PATH)
+        );
+
+        // 4. Neither exists -> defaults to canonical jero-runner.slice
+        assert_eq!(
+            resolve_default_slice_path_with(|_| false),
+            PathBuf::from(CANONICAL_SLICE_CGROUP_PATH)
+        );
+
+        // 5. Real constructor resolves consistently with host filesystem state
+        let controller = CgroupV2DomainController::default_slice();
+        let expected = if Path::new(CANONICAL_SLICE_CGROUP_PATH).exists() {
+            Path::new(CANONICAL_SLICE_CGROUP_PATH)
+        } else if Path::new(LEGACY_SLICE_CGROUP_PATH).exists() {
+            Path::new(LEGACY_SLICE_CGROUP_PATH)
+        } else {
+            Path::new(CANONICAL_SLICE_CGROUP_PATH)
+        };
+        assert_eq!(controller.base_path(), expected);
     }
 }

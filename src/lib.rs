@@ -40,12 +40,14 @@ pub use ingestion::{
 pub use store::{
     AlignedPromptEnvironment, BlobUsageInfo, CandidateSuitability, CapabilityFilter,
     ContentAddressedStore, DEFAULT_STORE_ROOT, DerivedBlobManager, DerivedResolution,
-    ENV_STORE_ROOT, GcReport, HighWaterMarkWarning, MAX_PATH_COMPONENT_LEN, MachineEventRule,
+    ENV_CATALOG_PATH, ENV_STORE_ROOT, GcReport, HighWaterMarkWarning, LEGACY_DEFAULT_STORE_ROOT,
+    LEGACY_ENV_CATALOG_PATH, LEGACY_ENV_STORE_ROOT, MAX_PATH_COMPONENT_LEN, MachineEventRule,
     MachineFeatureSchema, MachineModelManifest, MockProcMapsScanner, ModelManifest,
     ProcessMappingInfo, ProcessMapsScanner, RealProcMapsScanner, RecipeDescriptor, ResolvedAlias,
     RetentionPolicy, Sha256, StaleRecipeOutcome, StorageGarbageCollector,
     check_derived_memory_admission, hex_encode, parse_alias_id, parse_llamaguard_hazard,
-    repack_phi3_fused_tensor_ime_8x16, validate_path_component,
+    repack_phi3_fused_tensor_ime_8x16, resolve_catalog_path, resolve_default_store_root,
+    validate_path_component,
 };
 
 pub use protocol::{
@@ -74,17 +76,20 @@ pub use capacity::{
     ResolvedControlCapacity, ResolvedControlCapacityExt, SOC_CLUSTER_MASK, X100_CLUSTER_MASK,
     X100_DEFAULT_MAX_COMPUTE_THREADS,
 };
-pub use client::KvClient;
+pub use client::{
+    DEFAULT_KV_SOCKET_PATH, ENV_KV_SOCKET, KvClient, LEGACY_KV_SOCKET_PATH, resolve_kv_socket_path,
+};
 pub use dispatch::{
     DEFAULT_TOP_CAUSAL_FEATURES, ForwardPassRequest, ForwardPassResult, HysteresisEventTranslator,
     SystemEventPayload, VALID_EVENT_TARGET_SUBSYSTEMS, dispatch_forward_pass,
     validate_target_subsystem, wrap_input_tokens_as_arrow, wrap_logits_as_float32_array,
 };
 pub use domain::{
-    CgroupFs, CgroupV2DomainController, DomainPlacementMode, IsolationDomainController,
-    MockCgroupFs, MockOsAffinityBackend, OsAffinityBackend, PlacementOutcome, RealCgroupFs,
-    RealOsAffinityBackend, format_cpuset_list, parse_cpuset_list, resolve_worker_compute_mask,
-    validate_model_id, validate_tuning_profile_dory_overrides,
+    CANONICAL_SLICE_CGROUP_PATH, CgroupFs, CgroupV2DomainController, DomainPlacementMode,
+    IsolationDomainController, LEGACY_SLICE_CGROUP_PATH, MockCgroupFs, MockOsAffinityBackend,
+    OsAffinityBackend, PlacementOutcome, RealCgroupFs, RealOsAffinityBackend, format_cpuset_list,
+    parse_cpuset_list, resolve_worker_compute_mask, validate_model_id,
+    validate_tuning_profile_dory_overrides,
 };
 pub use error::ManagerError;
 pub use health::{
@@ -141,8 +146,9 @@ pub use session::{
     SessionState,
 };
 pub use supervisor::{
-    DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_PASS_TIMEOUT, ManagedWorker, ResumptionSnapshot,
-    WorkerPlacement, WorkerSupervisor, find_worker_binary,
+    DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_PASS_TIMEOUT, ENV_JERO_ENGINE_BIN, ENV_JERO_WORKER_BIN,
+    ENV_K3_WORKER_BIN, ManagedWorker, ResumptionSnapshot, WorkerPlacement, WorkerSupervisor,
+    find_worker_binary,
 };
 pub use telemetry::{
     A100_VLEN_BITS, BOUNDED_MEMLOCK_CEILING_KB, CollectorEndpoint, DEFAULT_COLLECTOR_TIMEOUT,

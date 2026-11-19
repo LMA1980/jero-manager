@@ -75,7 +75,7 @@ pub enum SourceCredentials {
     Token(String),
     /// HTTP Bearer authentication token.
     BearerToken(String),
-    /// Path to a protected credential file (e.g., mode 0600 `/etc/k3/credentials/<source>.env`).
+    /// Path to a protected credential file (e.g., mode 0600 `/etc/jero-runner/credentials/<source>.env`).
     SecretFile(PathBuf),
     /// HTTP Basic username and password/token pair.
     BasicAuth {

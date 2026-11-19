@@ -1,6 +1,6 @@
 //! Isolated compute worker supervisor and fault recovery lifecycle management.
 //!
-//! Supervises isolated `k3-worker` OS processes per model placement (ADR-018, ADR-041),
+//! Supervises isolated `jero-engine` OS processes per model placement (ADR-018, ADR-041),
 //! passes context memory arenas over UDS via `SCM_RIGHTS` (`AttachArenaCommand`),
 //! manages shared-memory `ArenaHeader` and `KvBlockMeta` tags,
 //! and orchestrates fault containment and clean recovery upon worker crash (Scenario 2).
@@ -10,7 +10,7 @@ use std::fs;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,98 +34,143 @@ use crate::domain::{
 };
 use crate::error::ManagerError;
 
-/// Locates the `k3-worker` binary across environment variables, target outputs, and PATH.
-///
-/// # Errors
-/// Returns [`ManagerError::WorkerSpawn`] if binary cannot be located.
-pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
-    if let Ok(env_bin) =
-        std::env::var("JERO_WORKER_BIN").or_else(|_| std::env::var("K3_WORKER_BIN"))
-    {
-        let p = PathBuf::from(env_bin);
-        if p.exists() {
-            return Ok(p);
-        }
-    }
+/// Primary environment variable overriding the compute worker (`jero-engine`) binary path.
+pub const ENV_JERO_ENGINE_BIN: &str = "JERO_ENGINE_BIN";
 
+/// Phase 1 compatibility environment variable overriding the compute worker binary path.
+pub const ENV_JERO_WORKER_BIN: &str = "JERO_WORKER_BIN";
+
+/// Legacy environment variable overriding the compute worker binary path.
+pub const ENV_K3_WORKER_BIN: &str = "K3_WORKER_BIN";
+
+const WORKER_ENV_VARS: &[&str] = &[
+    ENV_JERO_ENGINE_BIN,
+    ENV_JERO_WORKER_BIN,
+    ENV_K3_WORKER_BIN,
+    "CARGO_BIN_EXE_jero_engine",
+    "CARGO_BIN_EXE_jero-engine",
+    "CARGO_BIN_EXE_jero_worker",
+    "CARGO_BIN_EXE_jero-worker",
+    "CARGO_BIN_EXE_k3_worker",
+    "CARGO_BIN_EXE_k3-worker",
+];
+
+const WORKER_BINARY_NAMES: &[&str] = &["jero-engine", "jero-worker", "k3-worker"];
+
+const WORKER_RELATIVE_PREFIXES: &[&str] = &[
+    "target/debug",
+    "target/release",
+    "../target/debug",
+    "../target/release",
+    "../../target/debug",
+    "../../target/release",
+    "code/target/debug",
+    "code/target/release",
+    "../code/target/debug",
+    "../code/target/release",
+];
+
+fn find_worker_binary_with(
+    get_env: impl Fn(&str) -> Option<String>,
+    compile_time_bin: Option<&str>,
+    current_exe: Option<PathBuf>,
+    path_env: Option<&std::ffi::OsStr>,
+    exists: impl Fn(&Path) -> bool,
+    is_file: impl Fn(&Path) -> bool,
+    canonicalize: impl Fn(&Path) -> std::io::Result<PathBuf>,
+) -> Result<PathBuf, ManagerError> {
     // 1. Explicit runtime environment variable overrides
-    for env_key in &[
-        "JERO_WORKER_BIN",
-        "CARGO_BIN_EXE_jero_worker",
-        "CARGO_BIN_EXE_jero-worker",
-        "CARGO_BIN_EXE_k3_worker",
-        "CARGO_BIN_EXE_k3-worker",
-    ] {
-        if let Ok(val) = std::env::var(env_key) {
-            let p = PathBuf::from(val);
-            if p.exists() {
-                return Ok(p);
+    for env_key in WORKER_ENV_VARS {
+        if let Some(val) = get_env(env_key) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                if exists(&p) {
+                    return Ok(p);
+                }
             }
         }
     }
 
     // 2. Compile-time environment variable overrides (Cargo converts hyphens to underscores)
-    if let Some(bin) = option_env!("CARGO_BIN_EXE_jero_worker")
-        .or(option_env!("CARGO_BIN_EXE_jero-worker"))
-        .or(option_env!("CARGO_BIN_EXE_k3_worker"))
-        .or(option_env!("CARGO_BIN_EXE_k3-worker"))
-    {
+    if let Some(bin) = compile_time_bin {
         let p = PathBuf::from(bin);
-        if p.exists() {
+        if exists(&p) {
             return Ok(p);
         }
     }
 
     // 3. Search relative to current test/executable binary (e.g. under cargo test or cargo llvm-cov)
-    if let Ok(curr) = std::env::current_exe() {
+    if let Some(curr) = current_exe {
         let mut ancestor = curr.parent();
         while let Some(dir) = ancestor {
-            for name in &["jero-worker", "k3-worker"] {
-                let candidate = dir.join(name);
-                if candidate.is_file() {
-                    return Ok(candidate);
-                }
-                let debug_candidate = dir.join("debug").join(name);
-                if debug_candidate.is_file() {
-                    return Ok(debug_candidate);
-                }
-                let release_candidate = dir.join("release").join(name);
-                if release_candidate.is_file() {
-                    return Ok(release_candidate);
+            for name in WORKER_BINARY_NAMES {
+                for candidate in [
+                    dir.join(name),
+                    dir.join("debug").join(name),
+                    dir.join("release").join(name),
+                ] {
+                    if is_file(&candidate) {
+                        return Ok(candidate);
+                    }
                 }
             }
             ancestor = dir.parent();
         }
     }
 
-    // 4. Relative paths from workspace CWD
-    for path in &[
-        "target/debug/jero-worker",
-        "target/release/jero-worker",
-        "../target/debug/jero-worker",
-        "../target/release/jero-worker",
-        "../../target/debug/jero-worker",
-        "../../target/release/jero-worker",
-        "code/target/debug/jero-worker",
-        "code/target/release/jero-worker",
-        "../code/target/debug/jero-worker",
-        "../code/target/release/jero-worker",
-        "target/debug/k3-worker",
-        "target/release/k3-worker",
-        "../target/debug/k3-worker",
-        "../target/release/k3-worker",
-        "../../target/debug/k3-worker",
-        "../../target/release/k3-worker",
-    ] {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return fs::canonicalize(&p).map_err(|e| {
-                ManagerError::WorkerSpawn(format!("failed to canonicalize worker path: {e}"))
-            });
+    // 4. Relative paths from workspace CWD (`jero-engine` ahead of `jero-worker` ahead of `k3-worker`)
+    for name in WORKER_BINARY_NAMES {
+        for prefix in WORKER_RELATIVE_PREFIXES {
+            let p = Path::new(prefix).join(name);
+            if exists(&p) {
+                return canonicalize(&p).map_err(|e| {
+                    ManagerError::WorkerSpawn(format!("failed to canonicalize worker path: {e}"))
+                });
+            }
         }
     }
 
-    Ok(PathBuf::from("jero-worker"))
+    // 5. Search PATH directories (`jero-engine` ahead of `jero-worker` ahead of `k3-worker`)
+    if let Some(paths) = path_env {
+        for name in WORKER_BINARY_NAMES {
+            for dir in std::env::split_paths(paths) {
+                let candidate = dir.join(name);
+                if is_file(&candidate) {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+
+    Ok(PathBuf::from("jero-engine"))
+}
+
+/// Locates the `jero-engine` worker binary across environment variables, target outputs, and `PATH`.
+///
+/// Precedence: `JERO_ENGINE_BIN` -> `JERO_WORKER_BIN` -> `K3_WORKER_BIN` -> `CARGO_BIN_EXE_*` ->
+/// executable-relative / workspace-relative / `PATH` search (`jero-engine` ahead of `jero-worker`
+/// ahead of `k3-worker`).
+///
+/// # Errors
+/// Returns [`ManagerError::WorkerSpawn`] if binary canonicalization fails.
+pub fn find_worker_binary() -> Result<PathBuf, ManagerError> {
+    let compile_time_bin = option_env!("CARGO_BIN_EXE_jero_engine")
+        .or(option_env!("CARGO_BIN_EXE_jero-engine"))
+        .or(option_env!("CARGO_BIN_EXE_jero_worker"))
+        .or(option_env!("CARGO_BIN_EXE_jero-worker"))
+        .or(option_env!("CARGO_BIN_EXE_k3_worker"))
+        .or(option_env!("CARGO_BIN_EXE_k3-worker"));
+    let path_env = std::env::var_os("PATH");
+    find_worker_binary_with(
+        |k| std::env::var(k).ok(),
+        compile_time_bin,
+        std::env::current_exe().ok(),
+        path_env.as_deref(),
+        Path::exists,
+        Path::is_file,
+        |p| fs::canonicalize(p),
+    )
 }
 
 /// Default socket timeout for compute worker heartbeat requests (500ms).
@@ -1794,5 +1839,155 @@ mod tests {
         assert!(matches!(err, ManagerError::WorkerSpawn(_)));
         let err_str = format!("{err}");
         assert!(err_str.contains("cannot enable dynamic idle core lending or borrowing"));
+    }
+
+    #[test]
+    fn test_find_worker_binary_env_precedence_and_fallbacks() {
+        use std::collections::{HashMap, HashSet};
+
+        let ok_canon = |p: &Path| -> std::io::Result<PathBuf> { Ok(p.to_path_buf()) };
+        let envs = HashMap::from([
+            (ENV_JERO_ENGINE_BIN, "/opt/bin/jero-engine"),
+            (ENV_JERO_WORKER_BIN, "/opt/bin/jero-worker"),
+            (ENV_K3_WORKER_BIN, "/opt/bin/k3-worker"),
+            ("CARGO_BIN_EXE_jero_engine", "/cargo/jero-engine"),
+        ]);
+
+        // 1. JERO_ENGINE_BIN beats JERO_WORKER_BIN and K3_WORKER_BIN
+        let found = find_worker_binary_with(
+            |k| envs.get(k).map(|v| (*v).to_owned()),
+            None,
+            None,
+            None,
+            |_| true,
+            |_| true,
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(found, PathBuf::from("/opt/bin/jero-engine"));
+
+        // 2. Falls through nonexistent JERO_ENGINE_BIN to existing JERO_WORKER_BIN
+        let existing_worker: HashSet<&Path> = HashSet::from([
+            Path::new("/opt/bin/jero-worker"),
+            Path::new("/opt/bin/k3-worker"),
+        ]);
+        let found_worker = find_worker_binary_with(
+            |k| envs.get(k).map(|v| (*v).to_owned()),
+            None,
+            None,
+            None,
+            |p| existing_worker.contains(p),
+            |p| existing_worker.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(found_worker, PathBuf::from("/opt/bin/jero-worker"));
+
+        // 3. Falls through to K3_WORKER_BIN when only legacy env binary exists
+        let existing_legacy: HashSet<&Path> = HashSet::from([Path::new("/opt/bin/k3-worker")]);
+        let found_legacy = find_worker_binary_with(
+            |k| envs.get(k).map(|v| (*v).to_owned()),
+            None,
+            None,
+            None,
+            |p| existing_legacy.contains(p),
+            |p| existing_legacy.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(found_legacy, PathBuf::from("/opt/bin/k3-worker"));
+    }
+
+    #[test]
+    fn test_find_worker_binary_search_order_and_default() {
+        use std::collections::HashSet;
+
+        let no_env = |_: &str| -> Option<String> { None };
+        let no_fs = |_: &Path| -> bool { false };
+        let ok_canon = |p: &Path| -> std::io::Result<PathBuf> { Ok(p.to_path_buf()) };
+
+        // 1. Relative to current_exe prefers jero-engine ahead of jero-worker ahead of k3-worker
+        let exe_dir_files: HashSet<&Path> = HashSet::from([
+            Path::new("/build/target/debug/k3-worker"),
+            Path::new("/build/target/debug/jero-worker"),
+            Path::new("/build/target/debug/jero-engine"),
+        ]);
+        let found_exe_rel = find_worker_binary_with(
+            no_env,
+            None,
+            Some(PathBuf::from("/build/target/debug/deps/test_bin")),
+            None,
+            |p| exe_dir_files.contains(p),
+            |p| exe_dir_files.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(
+            found_exe_rel,
+            PathBuf::from("/build/target/debug/jero-engine")
+        );
+
+        let exe_dir_legacy: HashSet<&Path> = HashSet::from([
+            Path::new("/build/target/debug/k3-worker"),
+            Path::new("/build/target/debug/jero-worker"),
+        ]);
+        let found_exe_worker = find_worker_binary_with(
+            no_env,
+            None,
+            Some(PathBuf::from("/build/target/debug/deps/test_bin")),
+            None,
+            |p| exe_dir_legacy.contains(p),
+            |p| exe_dir_legacy.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(
+            found_exe_worker,
+            PathBuf::from("/build/target/debug/jero-worker")
+        );
+
+        // 2. CWD relative search prefers jero-engine ahead of jero-worker ahead of k3-worker
+        let rel_files: HashSet<&Path> = HashSet::from([
+            Path::new("target/debug/k3-worker"),
+            Path::new("target/release/jero-worker"),
+            Path::new("../code/target/release/jero-engine"),
+        ]);
+        let found_rel = find_worker_binary_with(
+            no_env,
+            None,
+            None,
+            None,
+            |p| rel_files.contains(p),
+            no_fs,
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(
+            found_rel,
+            PathBuf::from("../code/target/release/jero-engine")
+        );
+
+        // 3. PATH search prefers jero-engine ahead of jero-worker ahead of k3-worker
+        let path_os = std::env::join_paths(["/usr/local/bin", "/usr/bin"]).unwrap();
+        let path_files: HashSet<&Path> = HashSet::from([
+            Path::new("/usr/local/bin/k3-worker"),
+            Path::new("/usr/bin/jero-engine"),
+        ]);
+        let found_path = find_worker_binary_with(
+            no_env,
+            None,
+            None,
+            Some(&path_os),
+            |p| path_files.contains(p),
+            |p| path_files.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(found_path, PathBuf::from("/usr/bin/jero-engine"));
+
+        // 4. Fallback when nothing exists returns "jero-engine"
+        let found_default =
+            find_worker_binary_with(no_env, None, None, None, no_fs, no_fs, ok_canon).unwrap();
+        assert_eq!(found_default, PathBuf::from("jero-engine"));
     }
 }

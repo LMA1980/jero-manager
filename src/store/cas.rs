@@ -24,10 +24,76 @@ use crate::persistence::{
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Default system store root when none is configured via CLI or environment (ADR-036).
-pub const DEFAULT_STORE_ROOT: &str = "/var/lib/k3";
+pub const DEFAULT_STORE_ROOT: &str = "/var/lib/jero-runner";
 
-/// Environment variable for overriding the content-addressed store root (US-18 Scenario 2).
-pub const ENV_STORE_ROOT: &str = "K3_STORE_ROOT";
+/// Legacy Phase 1 system store root fallback when `/var/lib/jero-runner` does not exist yet.
+pub const LEGACY_DEFAULT_STORE_ROOT: &str = "/var/lib/k3";
+
+/// Primary environment variable for overriding the content-addressed store root (US-18 Scenario 2).
+pub const ENV_STORE_ROOT: &str = "JERO_STORE_ROOT";
+
+/// Legacy Phase 1 environment variable fallback for overriding the content-addressed store root.
+pub const LEGACY_ENV_STORE_ROOT: &str = "K3_STORE_ROOT";
+
+/// Primary environment variable for overriding the `DuckDB` catalog path.
+pub const ENV_CATALOG_PATH: &str = "JERO_CATALOG_PATH";
+
+/// Legacy Phase 1 environment variable fallback for overriding the `DuckDB` catalog path.
+pub const LEGACY_ENV_CATALOG_PATH: &str = "K3_CATALOG_PATH";
+
+fn resolve_store_root_with(
+    get_env: impl Fn(&str) -> Option<String>,
+    exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    for key in [ENV_STORE_ROOT, LEGACY_ENV_STORE_ROOT] {
+        if let Some(val) = get_env(key) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+    }
+    let canonical = Path::new(DEFAULT_STORE_ROOT);
+    if exists(canonical) {
+        return canonical.to_path_buf();
+    }
+    let legacy = Path::new(LEGACY_DEFAULT_STORE_ROOT);
+    if exists(legacy) {
+        return legacy.to_path_buf();
+    }
+    canonical.to_path_buf()
+}
+
+/// Resolves the default content-addressed store root path.
+///
+/// Precedence: `JERO_STORE_ROOT` -> `K3_STORE_ROOT` -> `/var/lib/jero-runner`
+/// (preferring an existing `/var/lib/k3` if `/var/lib/jero-runner` does not exist yet).
+#[must_use]
+pub fn resolve_default_store_root() -> PathBuf {
+    resolve_store_root_with(|k| std::env::var(k).ok(), Path::exists)
+}
+
+fn resolve_catalog_path_with(
+    store_root: &Path,
+    get_env: impl Fn(&str) -> Option<String>,
+) -> PathBuf {
+    for key in [ENV_CATALOG_PATH, LEGACY_ENV_CATALOG_PATH] {
+        if let Some(val) = get_env(key) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+    }
+    store_root.join("catalog.duckdb")
+}
+
+/// Resolves the `DuckDB` catalog file path, checking `JERO_CATALOG_PATH` ahead of
+/// `K3_CATALOG_PATH`, and defaulting to `<store_root>/catalog.duckdb`.
+#[must_use]
+pub fn resolve_catalog_path(store_root: &Path) -> PathBuf {
+    resolve_catalog_path_with(store_root, |k| std::env::var(k).ok())
+}
 
 /// Maximum allowed character length for any single path segment (source, namespace, name, tag).
 pub const MAX_PATH_COMPONENT_LEN: usize = 128;
@@ -511,13 +577,14 @@ impl ContentAddressedStore {
         })
     }
 
-    /// Opens the store at the configured default location, respecting `K3_STORE_ROOT` override.
+    /// Opens the store at the configured default location, respecting `JERO_STORE_ROOT`
+    /// and legacy `K3_STORE_ROOT` overrides.
     ///
     /// # Errors
     /// Returns [`K3Error::CapabilityMismatch`] on initialization failure.
     pub fn open_default(catalog: Arc<dyn CasCatalog>) -> Result<Self, K3Error> {
-        let path = std::env::var(ENV_STORE_ROOT).unwrap_or_else(|_| DEFAULT_STORE_ROOT.to_owned());
-        Self::open(Path::new(&path), catalog)
+        let path = resolve_default_store_root();
+        Self::open(&path, catalog)
     }
 
     /// Returns the root path of the store.
@@ -1742,6 +1809,71 @@ mod tests {
                 .get_machine_schema_json(&rec.manifest_digest)
                 .expect("query after reopen")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn test_store_root_and_catalog_path_precedence() {
+        use std::collections::HashMap;
+
+        // 1. JERO_STORE_ROOT beats K3_STORE_ROOT and filesystem paths
+        let env_both = HashMap::from([
+            (ENV_STORE_ROOT, "/mnt/nvme/jero-store"),
+            (LEGACY_ENV_STORE_ROOT, "/mnt/nvme/k3-store"),
+        ]);
+        assert_eq!(
+            resolve_store_root_with(|k| env_both.get(k).map(|v| (*v).to_owned()), |_| true),
+            PathBuf::from("/mnt/nvme/jero-store")
+        );
+
+        // 2. K3_STORE_ROOT fallback when JERO_STORE_ROOT is unset/blank
+        let env_legacy = HashMap::from([
+            (ENV_STORE_ROOT, "  "),
+            (LEGACY_ENV_STORE_ROOT, "/mnt/nvme/k3-store"),
+        ]);
+        assert_eq!(
+            resolve_store_root_with(|k| env_legacy.get(k).map(|v| (*v).to_owned()), |_| true),
+            PathBuf::from("/mnt/nvme/k3-store")
+        );
+
+        // 3. No env: /var/lib/jero-runner preferred if it exists (even if /var/lib/k3 also exists)
+        assert_eq!(
+            resolve_store_root_with(|_| None, |_| true),
+            PathBuf::from(DEFAULT_STORE_ROOT)
+        );
+
+        // 4. No env: falls back to /var/lib/k3 if only /var/lib/k3 exists
+        assert_eq!(
+            resolve_store_root_with(|_| None, |p| p == Path::new(LEGACY_DEFAULT_STORE_ROOT)),
+            PathBuf::from(LEGACY_DEFAULT_STORE_ROOT)
+        );
+
+        // 5. No env and neither exists: defaults to /var/lib/jero-runner
+        assert_eq!(
+            resolve_store_root_with(|_| None, |_| false),
+            PathBuf::from(DEFAULT_STORE_ROOT)
+        );
+
+        // 6. Catalog path precedence: JERO_CATALOG_PATH > K3_CATALOG_PATH > <store_root>/catalog.duckdb
+        let store_root = Path::new("/var/lib/jero-runner");
+        let cat_both = HashMap::from([
+            (ENV_CATALOG_PATH, "/var/lib/jero-runner/custom.duckdb"),
+            (LEGACY_ENV_CATALOG_PATH, "/var/lib/k3/legacy.duckdb"),
+        ]);
+        assert_eq!(
+            resolve_catalog_path_with(store_root, |k| cat_both.get(k).map(|v| (*v).to_owned())),
+            PathBuf::from("/var/lib/jero-runner/custom.duckdb")
+        );
+
+        let cat_legacy = HashMap::from([(LEGACY_ENV_CATALOG_PATH, "/var/lib/k3/legacy.duckdb")]);
+        assert_eq!(
+            resolve_catalog_path_with(store_root, |k| cat_legacy.get(k).map(|v| (*v).to_owned())),
+            PathBuf::from("/var/lib/k3/legacy.duckdb")
+        );
+
+        assert_eq!(
+            resolve_catalog_path_with(store_root, |_| None),
+            PathBuf::from("/var/lib/jero-runner/catalog.duckdb")
         );
     }
 }
