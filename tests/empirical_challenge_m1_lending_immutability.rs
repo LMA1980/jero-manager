@@ -16,8 +16,8 @@
     clippy::assert_is_empty
 )]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -344,6 +344,7 @@ fn test_challenge2a_concurrent_race_condition_instant_reclaim() {
         .expect("register borrower");
 
     const ROUNDS: u32 = 100;
+    let start_barrier = Arc::new(Barrier::new(2));
     let stop_signal = Arc::new(AtomicBool::new(false));
     let borrower_passes_completed = Arc::new(AtomicU32::new(0));
     let owner_passes_completed = Arc::new(AtomicU32::new(0));
@@ -355,6 +356,7 @@ fn test_challenge2a_concurrent_race_condition_instant_reclaim() {
 
     // Thread 1: Borrower worker
     let s_borrower = Arc::clone(&scheduler);
+    let barrier_b = Arc::clone(&start_barrier);
     let stop_b = Arc::clone(&stop_signal);
     let b_count = Arc::clone(&borrower_passes_completed);
     let b_mask = Arc::clone(&active_borrower_mask);
@@ -362,6 +364,7 @@ fn test_challenge2a_concurrent_race_condition_instant_reclaim() {
     let conflicts_b = Arc::clone(&overlap_conflicts);
 
     let borrower_handle = thread::spawn(move || {
+        barrier_b.wait();
         while !stop_b.load(Ordering::Acquire) {
             match s_borrower.schedule_forward_pass(borrower_id, Some(Duration::from_millis(50))) {
                 Ok(pass) => {
@@ -392,12 +395,14 @@ fn test_challenge2a_concurrent_race_condition_instant_reclaim() {
 
     // Thread 2: Owner traffic generator & instant reclaim assertor
     let s_owner = Arc::clone(&scheduler);
+    let barrier_o = Arc::clone(&start_barrier);
     let o_count = Arc::clone(&owner_passes_completed);
     let b_mask_o = Arc::clone(&active_borrower_mask);
     let o_mask_o = Arc::clone(&active_owner_mask);
     let conflicts_o = Arc::clone(&overlap_conflicts);
 
     let owner_handle = thread::spawn(move || {
+        barrier_o.wait();
         for _ in 0..ROUNDS {
             // Owner schedules pass
             match s_owner.schedule_forward_pass(owner_id, Some(Duration::from_millis(500))) {
@@ -426,6 +431,9 @@ fn test_challenge2a_concurrent_race_condition_instant_reclaim() {
                     o_mask_o.store(0, Ordering::Release);
                     s_owner.record_pass_completion(&pass, 3.0, 1.0, 4);
                     o_count.fetch_add(1, Ordering::Relaxed);
+
+                    // Allow brief idle window so borrower concurrently borrows idle cores and exercises reclaim
+                    thread::sleep(Duration::from_micros(50));
                 }
                 Err(e) => panic!("unexpected owner schedule error: {e:?}"),
             }
