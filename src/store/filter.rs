@@ -472,6 +472,9 @@ static BUILTIN_RECIPES: LazyLock<RwLock<HashMap<String, RecipeDescriptor>>> = La
     // 13. Machine-model non-LLM architectures (time-series, tabular, offline-RL control plane)
     register_machine_model_recipes(&mut map);
 
+    // 14. Multimodal / Non-LLM encoders, dense embedders, rerankers, vision & speech (M10)
+    register_multimodal_recipes(&mut map);
+
     RwLock::new(map)
 });
 
@@ -563,6 +566,55 @@ fn register_machine_model_recipes(map: &mut HashMap<String, RecipeDescriptor>) {
             },
         );
     }
+}
+
+fn register_multimodal_recipes(map: &mut HashMap<String, RecipeDescriptor>) {
+    let encoder_multimodal_quants: &[&str] = &[
+        "Q4_0", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32", "F16", "BF16",
+    ];
+    let qwen_embedding_quants: &[&str] = &[
+        "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q2_K", "Q3_K", "Q4_K_M", "Q5_K", "Q6_K", "Q8_0", "F32",
+        "F16", "BF16",
+    ];
+    let layouts: &[&str] = &["native", "ime_tile_8x16"];
+
+    for arch in [
+        "nomic-bert",
+        "bge",
+        "jina-bert",
+        "cross-encoder",
+        "reranker",
+        "bge-reranker",
+        "jina-reranker",
+        "modernbert-reranker",
+        "clip",
+        "siglip",
+        "whisper",
+    ] {
+        map.insert(
+            format!("{arch}@1.0.0"),
+            RecipeDescriptor {
+                architecture_id: arch,
+                recipe_version: "1.0.0",
+                supported_quants: encoder_multimodal_quants,
+                target_layouts: layouts,
+                default_chat_template: None,
+                special_tokens: None,
+            },
+        );
+    }
+
+    map.insert(
+        "qwen3-embedding@1.0.0".to_owned(),
+        RecipeDescriptor {
+            architecture_id: "qwen3-embedding",
+            recipe_version: "1.0.0",
+            supported_quants: qwen_embedding_quants,
+            target_layouts: layouts,
+            default_chat_template: None,
+            special_tokens: None,
+        },
+    );
 }
 
 /// Suitability and compatibility assessment for candidate models during search and inspection (US-20 Scenario 1).
@@ -739,6 +791,9 @@ impl CapabilityFilter {
                     .supported_quants
                     .iter()
                     .any(|q| q.eq_ignore_ascii_case(&manifest.quantization));
+                let fmt_lower = manifest.format.to_ascii_lowercase();
+                let format_supported =
+                    fmt_lower == "gguf" || fmt_lower == "safetensors" || fmt_lower == "synthetic";
 
                 if !quant_supported {
                     let reason = format_quant_rejection_reason(desc, &key, &manifest.quantization);
@@ -748,6 +803,14 @@ impl CapabilityFilter {
                         recipe_version: manifest.recipe_version.clone(),
                         quantization_supported: false,
                         reason: Some(reason),
+                    }
+                } else if !format_supported {
+                    CandidateSuitability {
+                        executable: false,
+                        architecture_id: manifest.architecture_id.clone(),
+                        recipe_version: manifest.recipe_version.clone(),
+                        quantization_supported: true,
+                        reason: Some(format!("unsupported model format '{}'", manifest.format)),
                     }
                 } else if manifest.context_length == 0 {
                     CandidateSuitability {

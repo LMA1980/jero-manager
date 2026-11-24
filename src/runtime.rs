@@ -29,8 +29,10 @@ use crate::prompt::{
     PromptPreparationRequest, SpecialTokens, Tokenizer, normalize_guardrail_input,
 };
 use crate::protocol::{
+    AudioTranscriptionRequest, AudioTranscriptionResponse, DecodedVisionImage,
     GuardrailEvaluateRequest, GuardrailEvaluateResponse, GuardrailPolicy, MachineInferRequest,
-    MachineInferResponse,
+    MachineInferResponse, OpenAiEmbeddingInput, OpenAiEmbeddingRequest, OpenAiEmbeddingResponse,
+    RerankRequest, RerankResponse, VisionSoftPromptBundle,
 };
 use crate::queue::AdmissionQueueManager;
 use crate::router::DecisionRouter;
@@ -433,6 +435,29 @@ pub type GuardrailEvaluatorFn = dyn Fn(&GuardrailEvaluateRequest) -> Result<Guar
 pub type MachineInferEvaluatorFn =
     dyn Fn(&MachineInferRequest, &[f32]) -> Result<Vec<f32>, ManagerError> + Send + Sync;
 
+/// Type alias for custom or test-injected embedding evaluators
+/// receiving `(request, tokenized_inputs)`.
+pub type EmbeddingEvaluatorFn = dyn Fn(&OpenAiEmbeddingRequest, &[Vec<u32>]) -> Result<Vec<Vec<f32>>, ManagerError>
+    + Send
+    + Sync;
+
+/// Type alias for custom or test-injected rerank evaluators
+/// receiving `(request, query_tokens, document_tokens)`.
+pub type RerankEvaluatorFn =
+    dyn Fn(&RerankRequest, &[u32], &[Vec<u32>]) -> Result<Vec<f32>, ManagerError> + Send + Sync;
+
+/// Type alias for custom or test-injected Whisper speech transcription evaluators
+/// receiving `(request, resampled_16khz_mono_pcm)`.
+pub type WhisperEvaluatorFn = dyn Fn(&AudioTranscriptionRequest, &[f32]) -> Result<AudioTranscriptionResponse, ManagerError>
+    + Send
+    + Sync;
+
+/// Type alias for custom or test-injected VLM `mmproj` soft-prompt evaluators
+/// receiving `(model_id, decoded_images)` and returning `(embeds, num_tokens, embed_dim)`.
+pub type VisionEvaluatorFn = dyn Fn(&str, &[DecodedVisionImage]) -> Result<(Vec<f32>, usize, usize), ManagerError>
+    + Send
+    + Sync;
+
 #[derive(Default)]
 struct GuardrailRuntimeState {
     policy: RwLock<Option<GuardrailPolicy>>,
@@ -444,6 +469,29 @@ struct MachineRuntimeState {
     schemas: RwLock<HashMap<String, MachineFeatureSchema>>,
     translators: RwLock<HashMap<String, HysteresisEventTranslator>>,
     evaluator: RwLock<Option<Arc<MachineInferEvaluatorFn>>>,
+}
+
+#[derive(Default)]
+struct MultimodalRuntimeState {
+    embedding: RwLock<Option<Arc<EmbeddingEvaluatorFn>>>,
+    rerank: RwLock<Option<Arc<RerankEvaluatorFn>>>,
+    whisper: RwLock<Option<Arc<WhisperEvaluatorFn>>>,
+    vision: RwLock<Option<Arc<VisionEvaluatorFn>>>,
+}
+
+impl fmt::Debug for MultimodalRuntimeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let has_emb = self.embedding.read().is_ok_and(|guard| guard.is_some());
+        let has_rerank = self.rerank.read().is_ok_and(|guard| guard.is_some());
+        let has_whisper = self.whisper.read().is_ok_and(|guard| guard.is_some());
+        let has_vision = self.vision.read().is_ok_and(|guard| guard.is_some());
+        f.debug_struct("MultimodalRuntimeState")
+            .field("has_embedding_evaluator", &has_emb)
+            .field("has_rerank_evaluator", &has_rerank)
+            .field("has_whisper_evaluator", &has_whisper)
+            .field("has_vision_evaluator", &has_vision)
+            .finish()
+    }
 }
 
 impl fmt::Debug for MachineRuntimeState {
@@ -544,6 +592,7 @@ pub struct ControlPlaneRuntime {
     telemetry: Arc<MuObserveTelemetryStreamer>,
     guardrail: Arc<GuardrailRuntimeState>,
     machine: Arc<MachineRuntimeState>,
+    multimodal: Arc<MultimodalRuntimeState>,
 }
 
 impl ControlPlaneRuntime {
@@ -660,6 +709,7 @@ impl ControlPlaneRuntime {
             telemetry,
             guardrail: Arc::new(GuardrailRuntimeState::default()),
             machine: Arc::new(MachineRuntimeState::default()),
+            multimodal: Arc::new(MultimodalRuntimeState::default()),
         })
     }
 
@@ -1188,6 +1238,254 @@ impl ControlPlaneRuntime {
             category,
             model: req.model.clone(),
         })
+    }
+
+    /// Registers a custom or test-injected evaluator for `POST /v1/embeddings`.
+    pub fn set_embedding_evaluator(&self, evaluator: Arc<EmbeddingEvaluatorFn>) {
+        let mut guard = self
+            .multimodal
+            .embedding
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard = Some(evaluator);
+    }
+
+    /// Registers a custom or test-injected evaluator for `POST /v1/rerank`.
+    pub fn set_rerank_evaluator(&self, evaluator: Arc<RerankEvaluatorFn>) {
+        let mut guard = self
+            .multimodal
+            .rerank
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard = Some(evaluator);
+    }
+
+    /// Registers a custom or test-injected evaluator for `POST /v1/audio/transcriptions`.
+    pub fn set_whisper_evaluator(&self, evaluator: Arc<WhisperEvaluatorFn>) {
+        let mut guard = self
+            .multimodal
+            .whisper
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard = Some(evaluator);
+    }
+
+    /// Registers a custom or test-injected `VlmMmprojBridge` evaluator for vision prompts.
+    pub fn set_vision_evaluator(&self, evaluator: Arc<VisionEvaluatorFn>) {
+        let mut guard = self
+            .multimodal
+            .vision
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard = Some(evaluator);
+    }
+
+    fn tokenize_multimodal_text(&self, model_id: &str, text: &str) -> Vec<u32> {
+        if let Ok(tok) = self.prompt_orchestrator.get_tokenizer(model_id)
+            && let Ok(ids) = tok.encode(text)
+            && !ids.is_empty()
+        {
+            return ids;
+        }
+        let mut ids: Vec<u32> = text
+            .split_whitespace()
+            .map(|word| {
+                let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+                for &b in word.as_bytes() {
+                    h ^= u64::from(b);
+                    h = h.wrapping_mul(0x0100_0000_01B3);
+                }
+                100 + u32::try_from(h % 32_000).unwrap_or(0)
+            })
+            .collect();
+        if ids.is_empty() {
+            ids.extend(text.bytes().map(|b| 100 + u32::from(b)));
+        }
+        if ids.is_empty() {
+            ids.push(1);
+        }
+        ids
+    }
+
+    fn model_placement_by_id(&self, model_id: &str) -> Option<ModelPlacementRecord> {
+        self.placements
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(model_id)
+            .cloned()
+    }
+
+    /// Executes `POST /v1/embeddings` inference through registered encoder/Qwen recipes,
+    /// custom evaluator hooks, or deterministic `jero-kernels-rvv` pooling fallback.
+    ///
+    /// # Errors
+    /// - [`ManagerError::Protocol`] (`400`) on empty/invalid inputs or malformed weights.
+    /// - [`ManagerError::PayloadTooLarge`] (`413`) on oversized text or token arrays.
+    /// - [`ManagerError::UnprocessableEntity`] (`422`) on invalid Matryoshka `dimensions` or exceeded `n_ctx`.
+    /// - [`ManagerError::ModelNotFound`] (`404`) if `req.model` is not registered.
+    /// - [`ManagerError::WorkerCrashed`] (`503`) if placement is dead.
+    pub fn evaluate_embeddings(
+        &self,
+        req: &OpenAiEmbeddingRequest,
+    ) -> Result<OpenAiEmbeddingResponse, ManagerError> {
+        crate::protocol::embeddings::validate_embedding_request(req)?;
+        self.check_alive_placement(&req.model)?;
+        let placement = self
+            .model_placement_by_id(&req.model)
+            .ok_or_else(|| ManagerError::ModelNotFound(req.model.clone()))?;
+
+        let tokenized_items: Vec<Vec<u32>> = match &req.input {
+            OpenAiEmbeddingInput::Single(text) => {
+                vec![self.tokenize_multimodal_text(&req.model, text)]
+            }
+            OpenAiEmbeddingInput::Batch(texts) => texts
+                .iter()
+                .map(|t| self.tokenize_multimodal_text(&req.model, t))
+                .collect(),
+            OpenAiEmbeddingInput::TokenIds(ids) => vec![ids.clone()],
+            OpenAiEmbeddingInput::TokenIdsBatch(batches) => batches.clone(),
+        };
+
+        let n_ctx = placement.n_ctx.max(512);
+        for (idx, seq) in tokenized_items.iter().enumerate() {
+            if seq.len() > n_ctx {
+                return Err(ManagerError::UnprocessableEntity(format!(
+                    "embedding input at index {idx} has {} tokens exceeding model n_ctx ({n_ctx})",
+                    seq.len()
+                )));
+            }
+        }
+
+        let custom_eval = self
+            .multimodal
+            .embedding
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let custom_vectors = match custom_eval {
+            Some(eval_fn) => Some(eval_fn(req, &tokenized_items)?),
+            None => None,
+        };
+
+        crate::protocol::embeddings::compute_embeddings_vectors(
+            req,
+            &tokenized_items,
+            placement.weights_path.as_deref(),
+            n_ctx,
+            custom_vectors,
+        )
+    }
+
+    /// Executes `POST /v1/rerank` document relevance scoring sorted descending by score.
+    ///
+    /// # Errors
+    /// - [`ManagerError::Protocol`] (`400`) on empty/invalid inputs or malformed weights.
+    /// - [`ManagerError::PayloadTooLarge`] (`413`) on oversized strings.
+    /// - [`ManagerError::UnprocessableEntity`] (`422`) on `top_n == Some(0)` or oversized batch.
+    /// - [`ManagerError::ModelNotFound`] (`404`) if `req.model` is not registered.
+    /// - [`ManagerError::WorkerCrashed`] (`503`) if placement is dead.
+    pub fn evaluate_rerank(&self, req: &RerankRequest) -> Result<RerankResponse, ManagerError> {
+        crate::protocol::embeddings::validate_rerank_request(req)?;
+        self.check_alive_placement(&req.model)?;
+        let placement = self
+            .model_placement_by_id(&req.model)
+            .ok_or_else(|| ManagerError::ModelNotFound(req.model.clone()))?;
+
+        let query_tokens = self.tokenize_multimodal_text(&req.model, &req.query);
+        let doc_tokens: Vec<Vec<u32>> = req
+            .documents
+            .iter()
+            .map(|doc| self.tokenize_multimodal_text(&req.model, doc.as_str()))
+            .collect();
+
+        let custom_eval = self
+            .multimodal
+            .rerank
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let custom_scores = match custom_eval {
+            Some(eval_fn) => Some(eval_fn(req, &query_tokens, &doc_tokens)?),
+            None => None,
+        };
+
+        crate::protocol::embeddings::compute_rerank_response(
+            req,
+            &query_tokens,
+            &doc_tokens,
+            placement.weights_path.as_deref(),
+            placement.n_ctx.max(512),
+            custom_scores,
+        )
+    }
+
+    /// Executes `POST /v1/audio/transcriptions` on normalized 16 kHz mono PCM samples.
+    ///
+    /// # Errors
+    /// - [`ManagerError::Protocol`] (`400`) on empty/non-finite audio or invalid weight binary.
+    /// - [`ManagerError::ModelNotFound`] (`404`) if `req.model` is not registered.
+    /// - [`ManagerError::WorkerCrashed`] (`503`) if placement is dead.
+    pub fn evaluate_audio_transcription(
+        &self,
+        req: &AudioTranscriptionRequest,
+        pcm_16khz: &[f32],
+    ) -> Result<AudioTranscriptionResponse, ManagerError> {
+        if req.model.trim().is_empty() {
+            return Err(ManagerError::Protocol(
+                "transcription 'model' field must not be empty".to_owned(),
+            ));
+        }
+        self.check_alive_placement(&req.model)?;
+        let placement = self
+            .model_placement_by_id(&req.model)
+            .ok_or_else(|| ManagerError::ModelNotFound(req.model.clone()))?;
+
+        let custom_eval = self
+            .multimodal
+            .whisper
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let tokenizer = self.prompt_orchestrator.get_tokenizer(&req.model).ok();
+
+        crate::protocol::audio::compute_whisper_transcription(
+            req,
+            pcm_16khz,
+            placement.weights_path.as_deref(),
+            custom_eval.as_ref(),
+            tokenizer.as_deref(),
+        )
+    }
+
+    /// Projects validated vision images into concatenated VLM `soft_prompt_embeds` via
+    /// `SiglipVisionRecipe`/`ClipVisionRecipe` + `VlmMmprojBridge` (or custom evaluator hook).
+    ///
+    /// # Errors
+    /// - [`ManagerError::ModelNotFound`] (`404`) if `model_id` is not registered.
+    /// - [`ManagerError::WorkerCrashed`] (`503`) if placement is not alive.
+    /// - [`ManagerError::Protocol`] / [`ManagerError::TensorBounds`] on invalid images or weights.
+    pub fn evaluate_vision_soft_prompts(
+        &self,
+        model_id: &str,
+        images: &[DecodedVisionImage],
+    ) -> Result<VisionSoftPromptBundle, ManagerError> {
+        self.check_alive_placement(model_id)?;
+        let placement = self
+            .model_placement_by_id(model_id)
+            .ok_or_else(|| ManagerError::ModelNotFound(model_id.to_owned()))?;
+        let custom_eval = self
+            .multimodal
+            .vision
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+
+        crate::protocol::vision::encode_vision_images_to_soft_prompts(
+            model_id,
+            images,
+            placement.weights_path.as_deref(),
+            custom_eval.as_ref(),
+        )
     }
 
     /// Returns a reference to the active [`MultiModelScheduler`].

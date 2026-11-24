@@ -32,6 +32,45 @@ use crate::protocol::types::{
 };
 use crate::runtime::{ControlPlaneRuntime, classify_canonical_security_text};
 
+fn openai_vision_error_response(err: ManagerError) -> HttpResponse {
+    let (status, err_type, code, message) = match err {
+        ManagerError::PayloadTooLarge(msg) => {
+            (413, "invalid_request_error", "payload_too_large", msg)
+        }
+        ManagerError::UnprocessableEntity(msg) => {
+            (422, "invalid_request_error", "unprocessable_entity", msg)
+        }
+        ManagerError::ModelNotFound(model_id) => (
+            404,
+            "invalid_request_error",
+            "model_not_found",
+            format!("Model '{model_id}' not loaded or does not exist"),
+        ),
+        other @ (ManagerError::WorkerCrashed { .. } | ManagerError::WorkerUnresponsive { .. }) => (
+            503,
+            "server_error",
+            "vision_worker_unavailable",
+            other.to_string(),
+        ),
+        other => (
+            400,
+            "invalid_request_error",
+            "invalid_image_input",
+            other.to_string(),
+        ),
+    };
+    let resp = OpenAiErrorResponse {
+        error: OpenAiErrorDetails {
+            message,
+            r#type: err_type.to_owned(),
+            param: Some("messages".to_owned()),
+            code: Some(code.to_owned()),
+        },
+    };
+    let json = serde_json::to_string_pretty(&resp).unwrap_or_default();
+    HttpResponse::error(status, json, Vec::new())
+}
+
 /// Unique request ID counter for deterministic or pseudo-unique ID generation.
 static OPENAI_REQUEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
 
@@ -104,6 +143,13 @@ impl OpenAiAdapter {
         traceparent: Option<String>,
     ) -> HttpResponse {
         let req_start = std::time::Instant::now();
+        // 0. Extract and validate multimodal vision content parts before model/queue admission
+        let decoded_images =
+            match crate::protocol::vision::extract_and_decode_openai_images(&req.messages) {
+                Ok(imgs) => imgs,
+                Err(err) => return openai_vision_error_response(err),
+            };
+
         // 1. Model resolution
         let model_entry = runtime.get_model_entry(&req.model);
         if model_entry.is_none() {
@@ -179,6 +225,19 @@ impl OpenAiAdapter {
             }
         };
 
+        let vision_bundle = if decoded_images.is_empty() {
+            None
+        } else {
+            match runtime.evaluate_vision_soft_prompts(&req.model, &decoded_images) {
+                Ok(bundle) => Some(bundle),
+                Err(err) => return openai_vision_error_response(err),
+            }
+        };
+        let vision_tokens = vision_bundle
+            .as_ref()
+            .map_or(0usize, |b| b.num_tokens as usize);
+        let token_count = token_count.saturating_add(vision_tokens);
+
         if n_ctx > 0 && token_count >= n_ctx {
             let err = OpenAiErrorResponse {
                 error: OpenAiErrorDetails {
@@ -226,7 +285,13 @@ impl OpenAiAdapter {
             }
         }
 
-        let raw_reply = Self::raw_simulated_reply(&req.model, &prompt_text);
+        let mut raw_reply = Self::raw_simulated_reply(&req.model, &prompt_text).to_owned();
+        if let Some(ref bundle) = vision_bundle {
+            raw_reply.push_str(&format!(
+                " [vlm_mmproj images={} soft_prompt_tokens={} embed_dim={}]",
+                bundle.images_processed, bundle.num_tokens, bundle.embed_dim
+            ));
+        }
 
         if is_streaming {
             // Streaming SSE branch (stream: true)
@@ -380,7 +445,7 @@ impl OpenAiAdapter {
                         &request_id,
                         &model_name,
                         created,
-                        &[raw_reply_stream],
+                        &[raw_reply_stream.as_str()],
                     ) {
                         if let Ok(json) = serde_json::to_string(&text_chunk) {
                             let _ = sse_sender.send(format!("data: {json}\n\n")).await;
@@ -486,7 +551,7 @@ impl OpenAiAdapter {
                 (vec![choice], 16u32)
             } else {
                 let (reasoning_content, visible_content) =
-                    ThinkingTagParser::split_full_text(raw_reply);
+                    ThinkingTagParser::split_full_text(&raw_reply);
                 let choice = OpenAiChoice {
                     index: 0,
                     message: OpenAiResponseMessage {

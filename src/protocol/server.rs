@@ -200,6 +200,12 @@ impl ProtocolServer {
             OpenAiAdapter::handle_http(req, Arc::clone(&self.runtime)).await
         } else if path == "/v1/messages" || path == "/messages" {
             ClaudeAdapter::handle_http(req, Arc::clone(&self.runtime)).await
+        } else if path == "/v1/embeddings" || path == "/embeddings" {
+            super::embeddings::handle_embeddings(req, Arc::clone(&self.runtime)).await
+        } else if path == "/v1/rerank" || path == "/rerank" {
+            super::embeddings::handle_rerank(req, Arc::clone(&self.runtime)).await
+        } else if path == "/v1/audio/transcriptions" || path == "/audio/transcriptions" {
+            super::audio::handle_audio_transcriptions(req, Arc::clone(&self.runtime)).await
         } else if path == "/v1/guardrail/evaluate" || path == "/guardrail/evaluate" {
             handle_guardrail_evaluate(req, Arc::clone(&self.runtime)).await
         } else if path == "/v1/machine/infer" || path == "/machine/infer" {
@@ -386,6 +392,8 @@ impl ProtocolServer {
             404 => "Not Found",
             405 => "Method Not Allowed",
             413 => "Payload Too Large",
+            415 => "Unsupported Media Type",
+            422 => "Unprocessable Entity",
             429 => "Too Many Requests",
             500 => "Internal Server Error",
             503 => "Service Unavailable",
@@ -476,7 +484,7 @@ impl ProtocolServer {
     }
 }
 
-fn method_not_allowed_response(method: &str, route: &str) -> HttpResponse {
+pub(crate) fn method_not_allowed_response(method: &str, route: &str) -> HttpResponse {
     let json = serde_json::json!({
         "error": {
             "message": format!("Method '{method}' not allowed for {route}; use POST"),
@@ -488,7 +496,7 @@ fn method_not_allowed_response(method: &str, route: &str) -> HttpResponse {
     HttpResponse::error(405, json, vec![("Allow".to_owned(), "POST".to_owned())])
 }
 
-fn malformed_json_response(err: &serde_json::Error) -> HttpResponse {
+pub(crate) fn malformed_json_response(err: &serde_json::Error) -> HttpResponse {
     let json = serde_json::json!({
         "error": {
             "message": format!("Malformed JSON request body: {err}"),
@@ -500,7 +508,7 @@ fn malformed_json_response(err: &serde_json::Error) -> HttpResponse {
     HttpResponse::error(400, json, Vec::new())
 }
 
-fn map_manager_error_to_http(
+pub(crate) fn map_manager_error_to_http(
     service_label: &str,
     unavailable_code: &str,
     err: ManagerError,
@@ -516,6 +524,28 @@ fn map_manager_error_to_http(
             })
             .to_string();
             HttpResponse::error(404, json, Vec::new())
+        }
+        ManagerError::PayloadTooLarge(msg) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "code": "payload_too_large"
+                }
+            })
+            .to_string();
+            HttpResponse::error(413, json, Vec::new())
+        }
+        ManagerError::UnprocessableEntity(msg) => {
+            let json = serde_json::json!({
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "code": "unprocessable_entity"
+                }
+            })
+            .to_string();
+            HttpResponse::error(422, json, Vec::new())
         }
         ManagerError::Protocol(msg) => {
             let json = serde_json::json!({

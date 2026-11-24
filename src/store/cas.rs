@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use jero_core::{K3Error, sanitize_and_normalize_features};
+use jero_core::{GgufFile, K3Error, QuantType, SafeTensorsFile, sanitize_and_normalize_features};
 
 use super::sha256::Sha256;
 use crate::dispatch::validate_target_subsystem;
@@ -22,6 +22,144 @@ use crate::persistence::{
 };
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Maximum weight file byte size buffered into memory for full zero-copy header/tensor inspection.
+pub const MAX_WEIGHT_INSPECTION_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Parsed weight inspection metadata from a `SafeTensors` or `GGUF` checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeightInspectionReport {
+    /// Canonical checkpoint format (`"safetensors"` or `"gguf"`).
+    pub format: String,
+    /// Parsed model architecture string from file metadata, if present.
+    pub architecture: Option<String>,
+    /// Number of tensors in the weight container.
+    pub tensor_count: usize,
+    /// Total tensor payload size in bytes.
+    pub total_weight_bytes: u64,
+    /// Extracted hidden/embedding dimension (`0` if omitted in metadata).
+    pub embedding_dim: usize,
+    /// Extracted context length (`0` if omitted in metadata).
+    pub context_length: usize,
+    /// Distinct tensor quantization / dtype identifiers found in the file.
+    pub dtypes: Vec<String>,
+}
+
+fn quant_label(q: QuantType) -> String {
+    format!("{q:?}")
+}
+
+/// Inspects an in-memory `SafeTensors` payload using [`SafeTensorsFile::from_bytes`].
+///
+/// # Errors
+/// Returns [`K3Error::TensorBoundsError`] or [`K3Error::CapabilityMismatch`] if header framing,
+/// tensor alignment, dtypes (`F32`/`F16`/`BF16`), or data offsets are invalid.
+pub fn inspect_safetensors_bytes(bytes: &[u8]) -> Result<WeightInspectionReport, K3Error> {
+    let st = SafeTensorsFile::from_bytes(bytes)?;
+    let meta = st.metadata();
+    let mut seen = HashSet::new();
+    let mut dtypes = Vec::new();
+    for tensor in st.tensors() {
+        let label = quant_label(tensor.quant());
+        if seen.insert(label.clone()) {
+            dtypes.push(label);
+        }
+    }
+    let arch = st
+        .metadata_value("architecture")
+        .map(str::to_owned)
+        .or_else(|| {
+            st.metadata_value("model_type")
+                .or_else(|| st.metadata_value("general.architecture"))
+                .map(str::to_owned)
+        });
+    let resolved_arch = arch.or_else(|| {
+        let fallback = st.architecture();
+        if fallback.is_empty() {
+            None
+        } else {
+            Some(fallback.to_owned())
+        }
+    });
+
+    Ok(WeightInspectionReport {
+        format: "safetensors".to_owned(),
+        architecture: resolved_arch,
+        tensor_count: meta.tensor_count(),
+        total_weight_bytes: u64::try_from(meta.total_weight_bytes()).unwrap_or(u64::MAX),
+        embedding_dim: meta.embedding_dim(),
+        context_length: meta.context_length(),
+        dtypes,
+    })
+}
+
+/// Inspects an in-memory `GGUF` payload using [`GgufFile::parse`].
+///
+/// # Errors
+/// Returns [`K3Error`] if GGUF magic, version, metadata, or tensor descriptors are malformed.
+pub fn inspect_gguf_bytes(bytes: &[u8]) -> Result<WeightInspectionReport, K3Error> {
+    let gguf = GgufFile::parse(bytes)?;
+    let meta = gguf.metadata();
+    let mut seen = HashSet::new();
+    let mut dtypes = Vec::new();
+    for tensor in meta.tensors() {
+        let label = quant_label(tensor.quant());
+        if seen.insert(label.clone()) {
+            dtypes.push(label);
+        }
+    }
+    let arch = gguf.architecture();
+    Ok(WeightInspectionReport {
+        format: "gguf".to_owned(),
+        architecture: if arch.is_empty() {
+            None
+        } else {
+            Some(arch.to_owned())
+        },
+        tensor_count: meta.tensor_count(),
+        total_weight_bytes: u64::try_from(meta.total_weight_bytes()).unwrap_or(u64::MAX),
+        embedding_dim: meta.embedding_dim(),
+        context_length: meta.context_length(),
+        dtypes,
+    })
+}
+
+/// Validates and inspects a weight checkpoint file (`"safetensors"` or `"gguf"`) on disk.
+///
+/// # Errors
+/// Returns [`K3Error::CapabilityMismatch`] or [`K3Error::TensorBoundsError`] on I/O error,
+/// oversized checkpoint above [`MAX_WEIGHT_INSPECTION_BYTES`], unsupported format, or invalid binary
+/// headers/tensors.
+pub fn inspect_weight_file(path: &Path, format: &str) -> Result<WeightInspectionReport, K3Error> {
+    let fmt_lower = format.to_ascii_lowercase();
+    let file_len = fs::metadata(path)
+        .map_err(|e| K3Error::CapabilityMismatch {
+            architecture: fmt_lower.clone(),
+            reason: format!("failed to stat weight file '{}': {e}", path.display()),
+        })?
+        .len();
+    if file_len > MAX_WEIGHT_INSPECTION_BYTES {
+        return Err(K3Error::CapabilityMismatch {
+            architecture: fmt_lower,
+            reason: format!(
+                "weight file '{}' ({file_len} bytes) exceeds inspection buffer limit ({MAX_WEIGHT_INSPECTION_BYTES} bytes)",
+                path.display()
+            ),
+        });
+    }
+    let bytes = fs::read(path).map_err(|e| K3Error::CapabilityMismatch {
+        architecture: fmt_lower.clone(),
+        reason: format!("failed to read weight file '{}': {e}", path.display()),
+    })?;
+    match fmt_lower.as_str() {
+        "safetensors" | "safetensor" => inspect_safetensors_bytes(&bytes),
+        "gguf" => inspect_gguf_bytes(&bytes),
+        other => Err(K3Error::CapabilityMismatch {
+            architecture: other.to_owned(),
+            reason: format!("unsupported model weight format '{format}' for binary inspection"),
+        }),
+    }
+}
 
 /// Default system store root when none is configured via CLI or environment (ADR-036).
 pub const DEFAULT_STORE_ROOT: &str = "/var/lib/jero-runner";
@@ -1039,6 +1177,47 @@ impl ContentAddressedStore {
         })?;
         let file_len = file.metadata().map_or(0, |m| m.len());
         Self::verify_format_header_from_file(&mut file, format, file_len)
+    }
+
+    /// Inspects a staged or promoted model weight file (`safetensors` or `gguf`) and cross-checks
+    /// its parsed tensor layout and manifest against [`super::filter::CapabilityFilter`].
+    ///
+    /// # Errors
+    /// Returns [`K3Error::CapabilityMismatch`] or [`K3Error::TensorBoundsError`] if the checkpoint
+    /// binary fails validation, architecture metadata conflicts, or the manifest recipe/quant/format
+    /// is not admitted.
+    pub fn validate_safetensors_weights_and_admit(
+        path: &Path,
+        manifest: &ModelManifest,
+    ) -> Result<(WeightInspectionReport, super::filter::CandidateSuitability), K3Error> {
+        let report = inspect_weight_file(path, &manifest.format)?;
+        if let Some(ref parsed_arch) = report.architecture {
+            let trimmed = parsed_arch.trim();
+            if !trimmed.is_empty()
+                && !trimmed.eq_ignore_ascii_case("unknown")
+                && !trimmed.eq_ignore_ascii_case(&manifest.architecture_id)
+                && !manifest.format.eq_ignore_ascii_case("safetensors")
+            {
+                return Err(K3Error::CapabilityMismatch {
+                    architecture: manifest.architecture_id.clone(),
+                    reason: format!(
+                        "weight header architecture '{trimmed}' does not match manifest architecture '{}'",
+                        manifest.architecture_id
+                    ),
+                });
+            }
+        }
+        let _desc = super::filter::CapabilityFilter::validate_model_manifest(manifest)?;
+        let suitability = super::filter::CapabilityFilter::evaluate_candidate(manifest);
+        if !suitability.executable {
+            return Err(K3Error::CapabilityMismatch {
+                architecture: manifest.architecture_id.clone(),
+                reason: suitability
+                    .reason
+                    .unwrap_or_else(|| "model manifest rejected by capability filter".to_owned()),
+            });
+        }
+        Ok((report, suitability))
     }
 
     fn persist_manifest_json(
