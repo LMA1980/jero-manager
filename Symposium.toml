@@ -16,3 +16,27 @@ source.cargo = "mu-observable-ipc"
 [[plugins]]
 depends-on = ["mu-auth"]
 source.cargo = "mu-auth"
+
+[[plugins]]
+depends-on = ["jero-kernels-rvv"]
+source.cargo = "jero-kernels-rvv"
+
+[[plugins]]
+depends-on = ["jero-arch-mistral"]
+source.cargo = "jero-arch-mistral"
+
+[[plugins]]
+depends-on = ["jero-arch-encoder"]
+source.cargo = "jero-arch-encoder"
+
+[[plugins]]
+depends-on = ["jero-arch-qwen"]
+source.cargo = "jero-arch-qwen"
+
+[[plugins]]
+depends-on = ["jero-arch-vision"]
+source.cargo = "jero-arch-vision"
+
+[[plugins]]
+depends-on = ["jero-arch-whisper"]
+source.cargo = "jero-arch-whisper"

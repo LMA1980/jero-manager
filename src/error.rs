@@ -42,6 +42,10 @@ pub enum ManagerError {
     TensorBounds(K3Error),
     /// Protocol framing or type error.
     Protocol(String),
+    /// Request or decoded media payload exceeds size limits (`HTTP 413`).
+    PayloadTooLarge(String),
+    /// Request contains syntactically valid data that violates semantic or dimension limits (`HTTP 422`).
+    UnprocessableEntity(String),
     /// Non-success status returned from peer.
     Status {
         /// Protocol status code.
@@ -113,6 +117,8 @@ impl fmt::Display for ManagerError {
             Self::Affinity(e) => write!(f, "[k3-manager affinity error] {e}"),
             Self::TensorBounds(e) => write!(f, "[k3-manager tensor bounds error] {e}"),
             Self::Protocol(msg) => write!(f, "[k3-manager protocol error] {msg}"),
+            Self::PayloadTooLarge(msg) => write!(f, "[k3-manager payload too large] {msg}"),
+            Self::UnprocessableEntity(msg) => write!(f, "[k3-manager unprocessable entity] {msg}"),
             Self::Status { status, message } => {
                 write!(f, "[k3-manager status {status:?}] {message}")
             }

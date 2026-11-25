@@ -102,6 +102,22 @@ impl HttpResponse {
         }
     }
 
+    /// Creates a plain UTF-8 text response.
+    #[must_use]
+    pub fn text(status: u16, text_body: String) -> Self {
+        Self {
+            status,
+            headers: vec![
+                (
+                    "Content-Type".to_owned(),
+                    "text/plain; charset=utf-8".to_owned(),
+                ),
+                ("Content-Length".to_owned(), text_body.len().to_string()),
+            ],
+            body: HttpResponseBody::Bytes(text_body.into_bytes()),
+        }
+    }
+
     /// Creates an SSE stream response.
     #[must_use]
     pub fn sse_stream(rx: tokio::sync::mpsc::Receiver<String>) -> Self {
@@ -800,4 +816,258 @@ pub struct MachineInferResponse {
     /// Optional deterministic Sink A system event emitted when hysteresis triggers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emitted_event: Option<SystemEventPayload>,
+}
+
+/// Supported encoding formats for `POST /v1/embeddings` output vectors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiEmbeddingEncodingFormat {
+    /// Standard JSON array of finite 32-bit floats (default).
+    #[default]
+    Float,
+    /// Little-endian IEEE-754 `f32` vector bytes encoded as standard Base64.
+    Base64,
+}
+
+/// Supported OpenAI-compatible `input` variants for `POST /v1/embeddings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OpenAiEmbeddingInput {
+    /// Single UTF-8 input string.
+    Single(String),
+    /// Batch of UTF-8 input strings.
+    Batch(Vec<String>),
+    /// Single pre-tokenized sequence of token IDs.
+    TokenIds(Vec<u32>),
+    /// Batch of pre-tokenized token ID sequences.
+    TokenIdsBatch(Vec<Vec<u32>>),
+}
+
+/// Request body for `POST /v1/embeddings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenAiEmbeddingRequest {
+    /// Target embedding model identifier.
+    pub model: String,
+    /// Input string(s) or token ID array(s) to embed.
+    pub input: OpenAiEmbeddingInput,
+    /// Output representation (`"float"` or `"base64"`).
+    #[serde(default)]
+    pub encoding_format: Option<OpenAiEmbeddingEncodingFormat>,
+    /// Optional Matryoshka truncation output dimension (`1 <= dimensions <= hidden_dim`).
+    #[serde(default)]
+    pub dimensions: Option<u32>,
+    /// Optional end-user identifier for auditing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+/// Encoded embedding vector representation returned per item in `POST /v1/embeddings`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OpenAiEmbeddingVector {
+    /// Dense JSON float array.
+    Float(Vec<f32>),
+    /// Base64-encoded little-endian `f32` bytes.
+    Base64(String),
+}
+
+/// Individual embedding result item inside [`OpenAiEmbeddingResponse`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiEmbeddingDatum {
+    /// Object type, always `"embedding"`.
+    pub object: String,
+    /// Zero-based index into the request `input` batch (`u32` per AGENTS.md §9).
+    pub index: u32,
+    /// L2-normalized embedding vector (optionally Matryoshka-truncated).
+    pub embedding: OpenAiEmbeddingVector,
+}
+
+/// Token consumption accounting for `POST /v1/embeddings` and `POST /v1/rerank`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenAiEmbeddingUsage {
+    /// Prompt/input token count processed (`u32` per AGENTS.md §9).
+    pub prompt_tokens: u32,
+    /// Total token count billed (`u32` per AGENTS.md §9).
+    pub total_tokens: u32,
+}
+
+/// Response payload for `POST /v1/embeddings`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiEmbeddingResponse {
+    /// Object type, always `"list"`.
+    pub object: String,
+    /// Ordered list of generated embedding items matching input batch order.
+    pub data: Vec<OpenAiEmbeddingDatum>,
+    /// Model identifier that served the request.
+    pub model: String,
+    /// Token usage summary.
+    pub usage: OpenAiEmbeddingUsage,
+}
+
+/// Document item accepted in `POST /v1/rerank`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RerankDocumentInput {
+    /// Plain text document string.
+    Text(String),
+    /// Structured object containing a `text` field.
+    Object {
+        /// Document text to score against the query.
+        text: String,
+        /// Additional metadata fields preserved cleanly on deserialization.
+        #[serde(flatten)]
+        extra: serde_json::Map<String, serde_json::Value>,
+    },
+}
+
+impl RerankDocumentInput {
+    /// Extracts the underlying document text slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Text(s) => s.as_str(),
+            Self::Object { text, .. } => text.as_str(),
+        }
+    }
+}
+
+/// Request payload for `POST /v1/rerank`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RerankRequest {
+    /// Target cross-encoder or semantic reranker model identifier.
+    pub model: String,
+    /// Query text to score documents against.
+    pub query: String,
+    /// Candidate documents to rank.
+    pub documents: Vec<RerankDocumentInput>,
+    /// Optional cap on returned top-ranked results (`>= 1`).
+    #[serde(default)]
+    pub top_n: Option<u32>,
+    /// Whether to echo the matched document text inside each result (`false` by default).
+    #[serde(default)]
+    pub return_documents: Option<bool>,
+}
+
+/// Optional echoed document body returned inside [`RerankResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RerankDocumentRef {
+    /// Matched document text.
+    pub text: String,
+}
+
+/// Single ranked document entry returned by `POST /v1/rerank`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RerankResult {
+    /// Original zero-based index into `RerankRequest::documents` (`u32` per AGENTS.md §9).
+    pub index: u32,
+    /// Calibrated relevance probability in `[0.0, 1.0]` sorted descending across results.
+    pub relevance_score: f32,
+    /// Echoed document text when `return_documents == Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<RerankDocumentRef>,
+}
+
+/// Response payload for `POST /v1/rerank`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RerankResponse {
+    /// Object type, always `"list"`.
+    pub object: String,
+    /// Model identifier that scored the documents.
+    pub model: String,
+    /// Candidate results sorted descending by `relevance_score`.
+    pub results: Vec<RerankResult>,
+    /// Token consumption summary.
+    pub usage: OpenAiEmbeddingUsage,
+}
+
+/// Output response format for `POST /v1/audio/transcriptions`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioTranscriptionFormat {
+    /// Standard OpenAI JSON `{ "text": ... }`.
+    #[default]
+    Json,
+    /// Plain UTF-8 text (`text/plain`).
+    Text,
+    /// Detailed JSON including language, duration, and segment breakdown.
+    VerboseJson,
+}
+
+impl AudioTranscriptionFormat {
+    /// Parses a response format parameter string (`"json"`, `"text"`, `"verbose_json"`).
+    ///
+    /// # Errors
+    /// Returns an error description for unsupported response format values.
+    pub fn parse_str(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "json" | "" => Ok(Self::Json),
+            "text" => Ok(Self::Text),
+            "verbose_json" => Ok(Self::VerboseJson),
+            other => Err(format!(
+                "unsupported response_format '{other}'; expected 'json', 'text', or 'verbose_json'"
+            )),
+        }
+    }
+}
+
+/// JSON/normalized internal request representation for `POST /v1/audio/transcriptions`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioTranscriptionRequest {
+    /// Target ASR model identifier (e.g. `"whisper-tiny"` or `"whisper"`).
+    pub model: String,
+    /// Optional base64-encoded RIFF/WAVE bytes (`application/json` input variant).
+    #[serde(default)]
+    pub audio_base64: Option<String>,
+    /// Optional pre-decoded mono `f32` PCM samples (`application/json` input variant).
+    #[serde(default)]
+    pub pcm_f32: Option<Vec<f32>>,
+    /// Sample rate in Hz associated with `pcm_f32` (defaults to `16_000` Hz when omitted).
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    /// Optional ISO-639-1 language hint (e.g. `"en"`, `"fr"`).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Desired response serialization format (`json`, `text`, `verbose_json`).
+    #[serde(default)]
+    pub response_format: Option<AudioTranscriptionFormat>,
+    /// Optional text prompt conditioning the decoder.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Optional decoding temperature (`0.0` greedy by default).
+    #[serde(default)]
+    pub temperature: Option<f32>,
+}
+
+/// Timed segment entry emitted inside `verbose_json` transcription responses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioTranscriptionSegment {
+    /// Segment index (`u32` per AGENTS.md §9).
+    pub id: u32,
+    /// Segment start time in seconds.
+    pub start: f32,
+    /// Segment end time in seconds.
+    pub end: f32,
+    /// Transcribed UTF-8 segment text.
+    pub text: String,
+    /// Predicted token IDs produced by the Whisper decoder.
+    pub tokens: Vec<u32>,
+}
+
+/// Response payload for `POST /v1/audio/transcriptions` JSON and `verbose_json` modes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioTranscriptionResponse {
+    /// Recognized UTF-8 transcription text.
+    pub text: String,
+    /// Task identifier (`"transcribe"`) in `verbose_json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    /// Resolved or detected ISO language code in `verbose_json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Total normalized audio duration in seconds in `verbose_json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f32>,
+    /// Ordered transcription segments in `verbose_json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<AudioTranscriptionSegment>>,
 }

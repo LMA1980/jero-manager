@@ -5,16 +5,29 @@
 
 #![allow(clippy::doc_markdown)]
 
+pub mod audio;
 pub mod claude;
+pub mod embeddings;
 pub mod mr_endpoints;
 pub mod openai;
 pub mod server;
 pub mod types;
+pub mod vision;
 
 use crate::runtime::ControlPlaneRuntime;
 use jero_tokenizer::{ThinkingDelta, ThinkingStreamExtractor};
 
+pub use audio::{
+    MAX_AUDIO_DURATION_SECS, MAX_DECODED_AUDIO_BYTES, MAX_RESAMPLED_SAMPLES_16KHZ,
+    MAX_SUPPORTED_SAMPLE_RATE, MIN_SUPPORTED_SAMPLE_RATE, handle_audio_transcriptions,
+    parse_http_transcription_payload, parse_wav_to_pcm_16khz,
+};
 pub use claude::ClaudeAdapter;
+pub use embeddings::{
+    MAX_EMBEDDING_BATCH_ITEMS, MAX_INPUT_STRING_BYTES, encode_embedding_base64,
+    format_embedding_vector, handle_embeddings, handle_rerank, validate_embedding_request,
+    validate_rerank_request,
+};
 pub use mr_endpoints::{
     AuthClock, ENV_ALLOW_LOOPBACK_NO_SECRET, ENV_AUTH_HEADER_GUIDE, ENV_AUTH_POLICY_FILE,
     ENV_MEMLOCK_CEILING_BYTES, ENV_OPENAI_BASE_URL, ENV_OPENAI_ROUTES, ENV_PROXY_SECRET,
@@ -32,16 +45,26 @@ pub use server::{
     handle_guardrail_evaluate, handle_machine_infer,
 };
 pub use types::{
-    ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails, ClaudeErrorResponse, ClaudeMessage,
-    ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem, ClaudeSystemBlock,
-    ClaudeThinkingConfig, ClaudeTool, ClaudeUsage, DEFAULT_MAX_REQUEST_BODY_BYTES,
-    DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest, GuardrailEvaluateResponse,
-    GuardrailPolicy, HttpRequest, HttpResponse, HttpResponseBody, MachineInferRequest,
-    MachineInferResponse, MessageContent, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice,
-    OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse, OpenAiErrorDetails,
-    OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiFunctionCallChunk,
-    OpenAiMessage, OpenAiResponseMessage, OpenAiStop, OpenAiTool, OpenAiToolCall,
-    OpenAiToolCallChunk, OpenAiUsage,
+    AudioTranscriptionFormat, AudioTranscriptionRequest, AudioTranscriptionResponse,
+    AudioTranscriptionSegment, ClaudeContent, ClaudeContentBlock, ClaudeErrorDetails,
+    ClaudeErrorResponse, ClaudeMessage, ClaudeMessageRequest, ClaudeMessageResponse, ClaudeSystem,
+    ClaudeSystemBlock, ClaudeThinkingConfig, ClaudeTool, ClaudeUsage,
+    DEFAULT_MAX_REQUEST_BODY_BYTES, DEFAULT_SOCKET_TIMEOUT_SECS, GuardrailEvaluateRequest,
+    GuardrailEvaluateResponse, GuardrailPolicy, HttpRequest, HttpResponse, HttpResponseBody,
+    MachineInferRequest, MachineInferResponse, MessageContent, OpenAiChatRequest,
+    OpenAiChatResponse, OpenAiChoice, OpenAiChunkChoice, OpenAiChunkDelta, OpenAiChunkResponse,
+    OpenAiEmbeddingDatum, OpenAiEmbeddingEncodingFormat, OpenAiEmbeddingInput,
+    OpenAiEmbeddingRequest, OpenAiEmbeddingResponse, OpenAiEmbeddingUsage, OpenAiEmbeddingVector,
+    OpenAiErrorDetails, OpenAiErrorResponse, OpenAiFunction, OpenAiFunctionCall,
+    OpenAiFunctionCallChunk, OpenAiMessage, OpenAiResponseMessage, OpenAiStop, OpenAiTool,
+    OpenAiToolCall, OpenAiToolCallChunk, OpenAiUsage, RerankDocumentInput, RerankDocumentRef,
+    RerankRequest, RerankResponse, RerankResult,
+};
+pub use vision::{
+    DecodedVisionImage, MAX_DECODED_IMAGE_BYTES, MAX_ENCODED_IMAGE_B64_BYTES, MAX_IMAGE_HEIGHT,
+    MAX_IMAGE_PIXELS, MAX_IMAGE_WIDTH, MAX_IMAGES_PER_REQUEST, MAX_INFLATED_PNG_BYTES,
+    VisionSoftPromptBundle, decode_bounded_image_bytes, extract_and_decode_claude_images,
+    extract_and_decode_openai_images,
 };
 
 /// Shared fail-closed inline guardrail gate invoked by both OpenAI and Claude adapters

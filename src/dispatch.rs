@@ -329,6 +329,50 @@ pub const VALID_EVENT_TARGET_SUBSYSTEMS: [&str; 3] = ["ActionRunner", "MuConDe",
 /// Default number of highest-magnitude causal features attached to emitted system events.
 pub const DEFAULT_TOP_CAUSAL_FEATURES: usize = 3;
 
+/// Canonical schema hash identifying continuous VLM soft-prompt embeddings staged via
+/// [`jero_core::ipc::layout::FeatureInputSlotHeader`].
+pub const SOFT_PROMPT_SCHEMA_HASH: u64 = 0x564C_4D5F_534F_4654;
+
+/// Validates and writes a projected VLM `soft_prompt_embeds` tensor `[num_tokens, embed_dim]`
+/// into a shared-memory feature slot via [`SharedMemoryArena::write_f32_feature_slot`].
+///
+/// # Errors
+/// Returns [`ManagerError::TensorBounds`] or [`ManagerError::Protocol`] if bounds, finiteness,
+/// or shared memory offsets fail validation.
+pub fn stage_soft_prompt_feature_slot(
+    arena: &mut SharedMemoryArena,
+    offset: usize,
+    sequence_id: u64,
+    soft_prompt_embeds: &[f32],
+    num_tokens: u32,
+    embed_dim: u32,
+) -> Result<usize, ManagerError> {
+    let rows = num_tokens as usize;
+    let cols = embed_dim as usize;
+    if rows == 0 || cols == 0 || soft_prompt_embeds.len() != rows.saturating_mul(cols) {
+        return Err(ManagerError::Protocol(format!(
+            "soft_prompt_embeds shape mismatch: expected {rows}x{cols}, got {} elements",
+            soft_prompt_embeds.len()
+        )));
+    }
+    if !soft_prompt_embeds.iter().all(|v| v.is_finite()) {
+        return Err(ManagerError::Protocol(
+            "soft_prompt_embeds contains NaN or infinite values".to_owned(),
+        ));
+    }
+    arena
+        .write_f32_feature_slot(
+            offset,
+            sequence_id,
+            rows,
+            cols,
+            soft_prompt_embeds,
+            false,
+            SOFT_PROMPT_SCHEMA_HASH,
+        )
+        .map_err(ManagerError::TensorBounds)
+}
+
 /// Validates that `target_subsystem` is one of the allowed control-plane destinations.
 ///
 /// # Errors

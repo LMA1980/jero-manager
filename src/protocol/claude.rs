@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use jero_core::error::K3Error;
 use jero_tokenizer::ThinkingDelta;
 
+use crate::error::ManagerError;
 use crate::prompt::normalize_guardrail_input;
 use crate::protocol::ThinkingTagParser;
 pub use crate::protocol::openai::audit_generated_tool_call;
@@ -33,6 +34,31 @@ use crate::runtime::ControlPlaneRuntime;
 
 /// Unique request ID counter for Claude messages.
 static CLAUDE_REQUEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
+
+fn claude_vision_error_response(err: ManagerError) -> HttpResponse {
+    let (status, err_type, message) = match err {
+        ManagerError::PayloadTooLarge(msg) => (413, "invalid_request_error", msg),
+        ManagerError::UnprocessableEntity(msg) => (422, "invalid_request_error", msg),
+        ManagerError::ModelNotFound(model_id) => (
+            404,
+            "not_found_error",
+            format!("Model '{model_id}' not loaded or does not exist"),
+        ),
+        other @ (ManagerError::WorkerCrashed { .. } | ManagerError::WorkerUnresponsive { .. }) => {
+            (503, "overloaded_error", other.to_string())
+        }
+        other => (400, "invalid_request_error", other.to_string()),
+    };
+    let resp = ClaudeErrorResponse {
+        r#type: "error".to_owned(),
+        error: ClaudeErrorDetails {
+            r#type: err_type.to_owned(),
+            message,
+        },
+    };
+    let json = serde_json::to_string_pretty(&resp).unwrap_or_default();
+    HttpResponse::error(status, json, Vec::new())
+}
 
 /// Generates a unique message identifier (`msg_<id>`).
 fn generate_message_id() -> String {
@@ -162,6 +188,13 @@ impl ClaudeAdapter {
             prev_role = Some(&msg.role);
         }
 
+        // 1b. Extract and validate base64 multimodal vision blocks (SSRF-safe)
+        let decoded_images =
+            match crate::protocol::vision::extract_and_decode_claude_images(&req.messages) {
+                Ok(imgs) => imgs,
+                Err(err) => return claude_vision_error_response(err),
+            };
+
         // 2. Model resolution
         let model_entry = runtime.get_model_entry(&req.model);
         if model_entry.is_none() {
@@ -222,6 +255,19 @@ impl ClaudeAdapter {
                 approx
             }
         };
+
+        let vision_bundle = if decoded_images.is_empty() {
+            None
+        } else {
+            match runtime.evaluate_vision_soft_prompts(&req.model, &decoded_images) {
+                Ok(bundle) => Some(bundle),
+                Err(err) => return claude_vision_error_response(err),
+            }
+        };
+        let vision_tokens = vision_bundle
+            .as_ref()
+            .map_or(0usize, |b| b.num_tokens as usize);
+        let token_count = token_count.saturating_add(vision_tokens);
 
         if n_ctx > 0 && token_count >= n_ctx {
             let err = ClaudeErrorResponse {
@@ -620,7 +666,7 @@ impl ClaudeAdapter {
             let mut content_blocks = Vec::new();
             let mut output_tokens = 0u32;
 
-            let (parsed_think, parsed_visible) = if thinking_enabled {
+            let (parsed_think, mut parsed_visible) = if thinking_enabled {
                 let raw_tagged = if req.model.to_ascii_lowercase().contains("gemma4") {
                     "<|think|>Reasoning internally before generating answer.<|/think|>Here is the response to your inquiry."
                 } else {
@@ -630,6 +676,12 @@ impl ClaudeAdapter {
             } else {
                 (None, "Here is the response to your inquiry.".to_owned())
             };
+            if let Some(ref bundle) = vision_bundle {
+                parsed_visible.push_str(&format!(
+                    " [vlm_mmproj images={} soft_prompt_tokens={} embed_dim={}]",
+                    bundle.images_processed, bundle.num_tokens, bundle.embed_dim
+                ));
+            }
 
             if let Some(think_text) = parsed_think {
                 content_blocks.push(ClaudeContentBlock {
