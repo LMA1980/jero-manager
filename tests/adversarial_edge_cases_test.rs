@@ -33,6 +33,9 @@ use jero_manager::supervisor::{WorkerPlacement, WorkerSupervisor};
 use zerocopy::FromBytes;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(500);
+// Serialize tests that spawn external `jero-engine` worker processes so parallel test threads
+// under `cargo llvm-cov` instrumentation do not contend on process startup.
+static WORKER_SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn unique_socket_path(prefix: &str) -> std::path::PathBuf {
     let pid = std::process::id();
@@ -52,6 +55,9 @@ fn create_dummy_weights(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn test_adversarial_worker_premature_exit_fast_detection() {
+    let _spawn_guard = WORKER_SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -125,6 +131,9 @@ fn test_adversarial_worker_premature_exit_fast_detection() {
 
 #[test]
 fn test_adversarial_context_limit_rejection() {
+    let _spawn_guard = WORKER_SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -217,6 +226,9 @@ fn test_adversarial_context_limit_rejection() {
 
 #[test]
 fn test_adversarial_signal_reporting_and_recover_running_worker() {
+    let _spawn_guard = WORKER_SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
