@@ -32,14 +32,14 @@ pedantic = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"
 
 [dependencies]
-jero-arch-mistral = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-mistral.git", branch = "feat/m10-multimodal-runtime", default-features = false }
-jero-arch-encoder = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-encoder.git", branch = "feat/m10-multimodal-runtime" }
-jero-arch-qwen = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-qwen.git", branch = "feat/m10-multimodal-runtime" }
-jero-arch-vision = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-vision.git", branch = "feat/m10-multimodal-runtime" }
-jero-arch-whisper = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-whisper.git", branch = "feat/m10-multimodal-runtime" }
-jero-core = { version = "0.1.0", git = "https://github.com/LMA1980/jero-core.git", branch = "feat/m10-multimodal-runtime" }
-jero-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/jero-tokenizer.git", branch = "feat/m10-multimodal-runtime" }
-jero-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kernels-rvv.git", branch = "feat/m10-multimodal-runtime" }
+jero-arch-mistral = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-mistral.git", branch = "main", default-features = false }
+jero-arch-encoder = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-encoder.git", branch = "main" }
+jero-arch-qwen = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-qwen.git", branch = "main" }
+jero-arch-vision = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-vision.git", branch = "main" }
+jero-arch-whisper = { version = "0.1.0", git = "https://github.com/LMA1980/jero-arch-whisper.git", branch = "main" }
+jero-core = { version = "0.1.0", git = "https://github.com/LMA1980/jero-core.git", branch = "main" }
+jero-tokenizer = { version = "0.1.0", git = "https://github.com/LMA1980/jero-tokenizer.git", branch = "main" }
+jero-kernels-rvv = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kernels-rvv.git", branch = "main" }
 mu-observable-ipc = { version = "0.1.0", git = "https://github.com/LMA1980/mu-observable-ipc.git", branch = "main" }
 mu-auth = { version = "0.1.0", git = "https://github.com/LMA1980/mu-auth.git", branch = "main", features = ["github-oauth"] }
 arrow-array = "59.3.1"
@@ -56,4 +56,4 @@ zerocopy = { version = "0.8.63", features = ["derive"] }
 duckdb = { version = "=1.2.2", default-features = false }
 
 [dev-dependencies]
-jero-kv-cache = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kv-cache.git", branch = "feat/m10-multimodal-runtime" }
+jero-kv-cache = { version = "0.1.0", git = "https://github.com/LMA1980/jero-kv-cache.git", branch = "main" }
