@@ -70,6 +70,11 @@ const WORKER_RELATIVE_PREFIXES: &[&str] = &[
     "../code/target/release",
 ];
 
+fn is_llvm_cov_target_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "llvm-cov-target")
+}
+
 fn find_worker_binary_with(
     get_env: impl Fn(&str) -> Option<String>,
     compile_time_bin: Option<&str>,
@@ -100,7 +105,10 @@ fn find_worker_binary_with(
         }
     }
 
-    // 3. Search relative to current test/executable binary (e.g. under cargo test or cargo llvm-cov)
+    // 3. Search relative to current test/executable binary (e.g. under cargo test or cargo llvm-cov).
+    // Deprioritize `llvm-cov-target` candidates so a coverage run in a shared target directory
+    // prefers the uninstrumented worker binary and avoids cross-repo `.profraw` contention.
+    let mut llvm_cov_fallback: Option<PathBuf> = None;
     if let Some(curr) = current_exe {
         let mut ancestor = curr.parent();
         while let Some(dir) = ancestor {
@@ -111,7 +119,13 @@ fn find_worker_binary_with(
                     dir.join("release").join(name),
                 ] {
                     if is_file(&candidate) {
-                        return Ok(candidate);
+                        if is_llvm_cov_target_path(&candidate) {
+                            if llvm_cov_fallback.is_none() {
+                                llvm_cov_fallback = Some(candidate);
+                            }
+                        } else {
+                            return Ok(candidate);
+                        }
                     }
                 }
             }
@@ -141,6 +155,11 @@ fn find_worker_binary_with(
                 }
             }
         }
+    }
+
+    // 6. Fall back to an `llvm-cov-target` candidate only if no uninstrumented binary exists.
+    if let Some(candidate) = llvm_cov_fallback {
+        return Ok(candidate);
     }
 
     Ok(PathBuf::from("jero-engine"))
@@ -1989,5 +2008,55 @@ mod tests {
         let found_default =
             find_worker_binary_with(no_env, None, None, None, no_fs, no_fs, ok_canon).unwrap();
         assert_eq!(found_default, PathBuf::from("jero-engine"));
+    }
+
+    #[test]
+    fn test_find_worker_binary_deprioritizes_llvm_cov_target() {
+        use std::collections::HashSet;
+
+        let no_env = |_: &str| -> Option<String> { None };
+        let ok_canon = |p: &Path| -> std::io::Result<PathBuf> { Ok(p.to_path_buf()) };
+        let cov_exe = Some(PathBuf::from(
+            "/build/target_shared/llvm-cov-target/debug/build/jero-manager/hash/out/test_bin",
+        ));
+
+        // 1. Prefer uninstrumented debug binary over sibling llvm-cov-target binary
+        let both_files: HashSet<&Path> = HashSet::from([
+            Path::new("/build/target_shared/llvm-cov-target/debug/jero-engine"),
+            Path::new("/build/target_shared/debug/jero-engine"),
+        ]);
+        let found_uninstrumented = find_worker_binary_with(
+            no_env,
+            None,
+            cov_exe.clone(),
+            None,
+            |p| both_files.contains(p),
+            |p| both_files.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(
+            found_uninstrumented,
+            PathBuf::from("/build/target_shared/debug/jero-engine")
+        );
+
+        // 2. Fall back to llvm-cov-target binary when no uninstrumented binary exists
+        let cov_only: HashSet<&Path> = HashSet::from([Path::new(
+            "/build/target_shared/llvm-cov-target/debug/jero-engine",
+        )]);
+        let found_fallback = find_worker_binary_with(
+            no_env,
+            None,
+            cov_exe,
+            None,
+            |p| cov_only.contains(p),
+            |p| cov_only.contains(p),
+            ok_canon,
+        )
+        .unwrap();
+        assert_eq!(
+            found_fallback,
+            PathBuf::from("/build/target_shared/llvm-cov-target/debug/jero-engine")
+        );
     }
 }
